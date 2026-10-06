@@ -1,0 +1,21 @@
+.git
+.gitignore
+.gitattributes
+.dockerignore
+Dockerfile
+docker-compose*.yml
+
+# Not needed at run time / must not be baked into an image
+esp32
+database
+README.md
+RAILWAY.md
+config/database.local.php
+**/secrets.h
+.env
+.env.*
+*.zip
+*.log
+.vscode
+.idea
+.claude

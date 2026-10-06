@@ -295,6 +295,16 @@ function audit(string $activity, string $module = 'System', ?int $userId = null,
 
 function client_ip(): string
 {
+    // Behind a trusted proxy REMOTE_ADDR is the proxy itself, which would put every
+    // visitor in one login-throttle bucket and one IP in the audit log. Use the
+    // address the proxy reports - only when the deployment has opted in.
+    if (defined('BEHIND_PROXY') && BEHIND_PROXY) {
+        $forwarded = trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''))[0]);
+        if ($forwarded !== '' && filter_var($forwarded, FILTER_VALIDATE_IP) !== false) {
+            return substr($forwarded, 0, 45);
+        }
+    }
+
     return substr((string) ($_SERVER['REMOTE_ADDR'] ?? 'cli'), 0, 45);
 }
 

@@ -20,6 +20,18 @@ header_remove('X-Powered-By');
 ini_set('display_errors', '0');
 ini_set('log_errors', '1');
 
+/*
+ * Behind a TLS-terminating reverse proxy (Railway, Render, a load balancer) PHP sees
+ * plain HTTP from the proxy's address. Opt in with DISINFENTRY_BEHIND_PROXY=1 so the
+ * app treats the request as HTTPS when the proxy says so - which turns on the Secure
+ * session cookie and HSTS. It is opt-in because X-Forwarded-Proto is only trustworthy
+ * when a proxy you control sets it; on a directly exposed server a client could forge it.
+ */
+define('BEHIND_PROXY', getenv('DISINFENTRY_BEHIND_PROXY') === '1');
+if (BEHIND_PROXY && strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+}
+
 require_once APP_ROOT . '/config/database.php';
 require_once APP_ROOT . '/includes/functions.php';
 

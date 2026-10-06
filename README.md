@@ -504,6 +504,9 @@ Booth telemetry, written by `api/booth_sync.php`:
 
 ## Deployment checklist
 
+Deploying with Docker (Railway, Render, a VPS)? See [RAILWAY.md](RAILWAY.md). The checklist
+below is for a classic Apache + PHP + MySQL host.
+
 1. **Database** — start MySQL, import `database/disinfentry.sql`, then each file in
    `database/migrations/` in order.
 2. **Credentials** — copy `config/database.local.example.php` to `config/database.local.php`
