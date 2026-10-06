@@ -4,8 +4,12 @@ FROM php:8.2-apache
 # pdo_mysql is the only extension the app needs that the base image lacks
 # (mbstring, session, json etc. are already built in). ZipArchive is not needed:
 # the Excel export falls back to its own zip writer.
+# mod_php needs the prefork MPM. Make that explicit: if another MPM is also loaded
+# Apache refuses to start ("AH00534: More than one MPM loaded") and the container
+# crashes straight away.
 RUN docker-php-ext-install pdo_mysql \
-    && a2enmod rewrite headers \
+    && (a2dismod mpm_event mpm_worker || true) \
+    && a2enmod mpm_prefork rewrite headers \
     && rm -rf /var/lib/apt/lists/*
 
 # Let the app's .htaccess files take effect (config/includes protection, headers).

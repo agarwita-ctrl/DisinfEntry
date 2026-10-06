@@ -10,4 +10,10 @@ sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:${PORT}>/" /etc/apache2/sites-a
 mkdir -p /var/www/html/assets/uploads
 chown -R www-data:www-data /var/www/html/assets/uploads
 
+# Validate the configuration before starting. If it is broken, the reason is printed
+# here, in the deploy log, instead of the container just disappearing.
+echo "[entrypoint] listening on port ${PORT}; checking Apache configuration..."
+apache2ctl configtest
+echo "[entrypoint] configuration OK, starting Apache"
+
 exec "$@"
