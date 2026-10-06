@@ -23,9 +23,14 @@ COPY . /var/www/html/
 RUN mkdir -p /var/www/html/assets/uploads \
     && chown -R www-data:www-data /var/www/html/assets/uploads
 
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Wrap the image's own start script instead of adding an ENTRYPOINT. The wrapper
+# (docker/entrypoint.sh) binds Apache to Railway's PORT, repairs the MPM set-up and
+# validates the config, then runs the real apache2-foreground. Because it takes over
+# the name `apache2-foreground`, it also runs when a platform setting (a custom
+# "start command") launches that name directly, which an ENTRYPOINT would not cover.
+RUN test -x /usr/local/bin/apache2-foreground \
+    && mv /usr/local/bin/apache2-foreground /usr/local/bin/apache2-foreground.real
+COPY docker/entrypoint.sh /usr/local/bin/apache2-foreground
+RUN chmod +x /usr/local/bin/apache2-foreground
 
-# Railway injects PORT; the entrypoint makes Apache listen on it (80 if unset).
-ENTRYPOINT ["entrypoint.sh"]
 CMD ["apache2-foreground"]

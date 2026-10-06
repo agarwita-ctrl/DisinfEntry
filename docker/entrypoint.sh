@@ -33,4 +33,5 @@ echo "[entrypoint] checking Apache configuration..."
 apache2ctl configtest
 echo "[entrypoint] configuration OK, starting Apache"
 
-exec "$@"
+# Installed as /usr/local/bin/apache2-foreground; the image's original is renamed.
+exec apache2-foreground.real "$@"
