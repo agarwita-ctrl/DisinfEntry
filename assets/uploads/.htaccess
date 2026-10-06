@@ -1,0 +1,19 @@
+# Uploaded images only. Nothing here is ever executed.
+#
+# api/settings.php already derives the extension from getimagesize() rather than
+# the submitted filename, so a .php file cannot be written today. This is the
+# second lock: if that validation is ever loosened, the directory still cannot
+# run what lands in it.
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag engine off
+</IfModule>
+
+<FilesMatch "\.(php|phtml|php\d|phar|cgi|pl|py|sh|htaccess)$">
+  Require all denied
+</FilesMatch>
+
+Options -Indexes -ExecCGI
+RemoveHandler .php .phtml .phar

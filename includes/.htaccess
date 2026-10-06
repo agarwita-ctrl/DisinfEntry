@@ -1,0 +1,3 @@
+# Server-side includes only. Nothing here is ever requested by a browser, so
+# nothing here should be reachable by one (403.php, for one, rendered a page).
+Require all denied

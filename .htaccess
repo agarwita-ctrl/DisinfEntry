@@ -1,0 +1,60 @@
+# DisinfEntry — Apache configuration
+
+# Never expose the raw SQL schema, the CLI seeder, or firmware source over HTTP.
+#
+# The .ino is not documentation: it carries the WiFi password and the booth API
+# key in clear text, and it lives under the web root because it ships with the
+# project. Served, it hands both to anyone who can reach the site - and the API
+# key is the only thing standing in front of api/booth_sync.php.
+<FilesMatch "(\.(sql|md|ino|h|hpp|c|cpp|log|bak|ya?ml|ini)|^\.git.*)$">
+  Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Block direct access to the config directory.
+  RewriteRule ^config/ - [F,L]
+  RewriteRule ^database/ - [F,L]
+
+  # Firmware source. Denied by extension above as well; this covers anything
+  # dropped in the folder later that the list does not name.
+  RewriteRule ^esp32/ - [F,L]
+</IfModule>
+
+# Never render PHP errors to the browser.
+#
+# XAMPP ships display_errors=On, which puts failing SQL, bound values and
+# absolute paths in front of whoever triggered the error - including the
+# unauthenticated device endpoints. Set here rather than in php.ini so it
+# applies to this application without changing every other site on the machine.
+# log_errors stays on, so diagnostics are still in the Apache error log.
+<IfModule mod_php.c>
+  php_flag display_errors off
+  php_flag log_errors on
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag display_errors off
+  php_flag log_errors on
+</IfModule>
+
+# Basic hardening headers.
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+  Header set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+
+  # Only meaningful (and only sent) when the site is actually served over HTTPS.
+  Header set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+
+  # expose_php is PHP_INI_SYSTEM and cannot be turned off from .htaccess, so the
+  # banner is stripped on the way out instead. Same result: no PHP version
+  # advertised to anyone fingerprinting the host.
+  Header always unset X-Powered-By
+</IfModule>
+
+# Hide directory listings.
+Options -Indexes
+
+DirectoryIndex index.php login.php

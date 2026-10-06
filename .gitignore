@@ -1,0 +1,25 @@
+# --- Secrets and machine-specific config -------------------------------
+config/database.local.php
+esp32/DisinfEntry_Booth/secrets.h
+.env
+.env.*
+!.env.example
+
+# --- Runtime data ------------------------------------------------------
+assets/uploads/*
+!assets/uploads/.htaccess
+*.log
+
+# --- Generated files ---------------------------------------------------
+*.zip
+*.xlsx
+entry_logs_*.csv
+*_report_*.csv
+
+# --- Editors and OS ----------------------------------------------------
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,12 @@
+# Normalise line endings so Windows and Linux (Docker, hosts) agree.
+* text=auto
+*.php  text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.sql  text eol=lf
+*.ino  text eol=lf
+*.h    text eol=lf
+.htaccess text eol=lf
+*.png  binary
+*.jpg  binary
+*.ico  binary
