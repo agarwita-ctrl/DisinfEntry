@@ -1,7 +1,16 @@
 # Deploying DisinfEntry on Railway
 
-The repository ships a `Dockerfile` (PHP 8.2 + Apache), so Railway builds and runs it as is.
-The image is **not** tested on Railway from this repository's history - follow the checks at the
+The repository ships a `Dockerfile` (PHP 8.2 CLI running PHP's built-in web server with 8
+workers), so Railway builds and runs it as is.
+
+**Why not Apache:** an earlier Apache-based image kept crashing on Railway at start-up with
+`AH00534: More than one MPM loaded`. The built-in server has no module system, so that failure
+cannot happen. Because it does not read `.htaccess`, `docker/router.php` re-implements those
+protections (private folders, source file types, dotfiles, no execution in `assets/uploads`, the
+security headers). It is a sensible fit for one farm's traffic; for heavy load, run the app behind
+Apache or nginx on a VPS instead (see the README's deployment checklist).
+
+The image has not been run on Railway from this repository's history - follow the checks at the
 end. Railway's screens and plan details change; treat the menu names below as a guide.
 
 ## 1. Create the project

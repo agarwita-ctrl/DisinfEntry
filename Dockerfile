@@ -1,36 +1,29 @@
-# DisinfEntry - PHP 8.2 + Apache, for Railway / Render / any Docker host.
-FROM php:8.2-apache
+# DisinfEntry - PHP 8.2 CLI image running PHP's built-in web server, for Railway and
+# other Docker hosts.
+#
+# Why not Apache: the php:apache image kept failing at start-up on Railway with
+# "AH00534: More than one MPM loaded". The built-in server is a single PHP process with
+# no module system, so that failure cannot occur. docker/router.php re-implements the
+# .htaccess protections, because the built-in server does not read .htaccess.
+FROM php:8.2-cli
 
 # pdo_mysql is the only extension the app needs that the base image lacks
-# (mbstring, session, json etc. are already built in). ZipArchive is not needed:
-# the Excel export falls back to its own zip writer.
-# mod_php needs the prefork MPM. Make that explicit: if another MPM is also loaded
-# Apache refuses to start ("AH00534: More than one MPM loaded") and the container
-# crashes straight away.
-RUN docker-php-ext-install pdo_mysql \
-    && (a2dismod mpm_event mpm_worker || true) \
-    && a2enmod mpm_prefork rewrite headers \
-    && rm -rf /var/lib/apt/lists/*
+# (mbstring, session, json etc. are built in). ZipArchive is not needed: the Excel
+# export falls back to its own zip writer.
+RUN docker-php-ext-install pdo_mysql
 
-# Let the app's .htaccess files take effect (config/includes protection, headers).
-COPY docker/apache.conf /etc/apache2/conf-available/disinfentry.conf
-RUN a2enconf disinfentry
+WORKDIR /app
+COPY . /app
 
-COPY . /var/www/html/
+# Run as an unprivileged user. Uploads (the logo) must be writable by it; mount a volume
+# at /app/assets/uploads to keep them across deploys.
+RUN mkdir -p /app/assets/uploads \
+    && chown -R www-data:www-data /app/assets/uploads
+USER www-data
 
-# Uploads (the logo) must be writable by Apache. Mount a volume here to keep them
-# across deploys.
-RUN mkdir -p /var/www/html/assets/uploads \
-    && chown -R www-data:www-data /var/www/html/assets/uploads
+# The built-in server is single-process by default, so one slow request (an export,
+# a booth sync) would block everyone. Several workers fix that.
+ENV PHP_CLI_SERVER_WORKERS=8
 
-# Wrap the image's own start script instead of adding an ENTRYPOINT. The wrapper
-# (docker/entrypoint.sh) binds Apache to Railway's PORT, repairs the MPM set-up and
-# validates the config, then runs the real apache2-foreground. Because it takes over
-# the name `apache2-foreground`, it also runs when a platform setting (a custom
-# "start command") launches that name directly, which an ENTRYPOINT would not cover.
-RUN test -x /usr/local/bin/apache2-foreground \
-    && mv /usr/local/bin/apache2-foreground /usr/local/bin/apache2-foreground.real
-COPY docker/entrypoint.sh /usr/local/bin/apache2-foreground
-RUN chmod +x /usr/local/bin/apache2-foreground
-
-CMD ["apache2-foreground"]
+# Railway injects PORT (8080 if it is somehow unset). Errors go to the log, not the page.
+CMD ["sh", "-c", "exec php -d display_errors=0 -d log_errors=1 -d error_log=/dev/stderr -S 0.0.0.0:${PORT:-8080} -t /app /app/docker/router.php"]
