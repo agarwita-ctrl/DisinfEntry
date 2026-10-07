@@ -29,8 +29,8 @@ app behind Apache or nginx on a VPS instead.
 2. **A Railway account** (railway.com), signed in with the same GitHub account. Railway gives
    a trial credit; after that it is paid by usage. Check their current pricing before relying
    on it.
-3. **A database client** for the import in Part 5: **DBeaver Community** (free, dbeaver.io) is
-   the one this guide uses. XAMPP's own `mysql.exe` may fail against Railway's MySQL 9 with an
+3. **A database client** for the import in Part 5: **HeidiSQL** or **DBeaver Community** (both
+   free); the guide covers both. XAMPP's own `mysql.exe` may fail against Railway's MySQL 9 with an
    authentication-plugin error, so do not rely on it.
 
 ---
@@ -120,6 +120,17 @@ With DBeaver:
 5. Run the **whole script** with **Alt + X** (*Execute SQL Script*), not Ctrl + Enter.
 6. When it finishes, refresh the connection's tables. You should see **14 tables**; `users`
    has 3 rows and `settings` has 16.
+
+With **HeidiSQL** instead:
+
+1. **New** session -> network type *MariaDB or MySQL (TCP/IP)*; **Hostname** and **Port** from
+   Part 4; **User** and **Password** from the MySQL service's Variables; **Databases**: `railway`.
+2. Click **Open**. If it fails with *authentication plugin 'caching_sha2_password' cannot be
+   loaded*, edit the session and on the **Settings** tab change **Library** to the newest
+   `libmysql-…dll` in the list (Railway runs MySQL 9).
+3. Select `railway` in the left list, then **Tools -> Run SQL file…** and choose
+   `database/disinfentry_deploy.sql`. (Or **File -> Load SQL file…** and press **F9**.)
+4. Right-click `railway` -> **Refresh**: you should see 14 tables, 3 rows in `users`, 16 in `settings`.
 
 If it fails partway, run the script again - it begins by dropping its own tables.
 
@@ -212,5 +223,5 @@ pointed at a local XAMPP server.
 | 502 / "Application failed to respond" | The service crashed or is not listening on Railway's `PORT`. Open **Deploy Logs**; with the built-in server you should see a line like `Development Server (http://0.0.0.0:…) started`. |
 | Signed in, then bounced back to login | `DISINFENTRY_BEHIND_PROXY=1` is missing, so the cookie is not treated as secure over HTTPS. Add it and redeploy. |
 | Import: `Unknown database` or `Access denied` | Wrong database name or password in the DBeaver connection; copy them again from the MySQL service's Variables tab. |
-| Import: `Authentication plugin 'caching_sha2_password' cannot be loaded` | You used XAMPP's `mysql.exe`. Use DBeaver (or HeidiSQL) instead. |
+| Import: `Authentication plugin 'caching_sha2_password' cannot be loaded` | Used XAMPP's `mysql.exe`: use HeidiSQL or DBeaver instead. In HeidiSQL, if it still appears, set the session's **Library** to the newest `libmysql-…dll`. |
 | Logo disappears after a deploy | Add the volume in Part 7. |
