@@ -430,7 +430,8 @@ DisinfEntry/
 │   ├── database.php            PDO connection (credentials live in database.local.php)
 │   └── database.local.example.php   Template for the git-ignored database.local.php
 ├── database/
-│   ├── disinfentry.sql         Schema + seed data
+│   ├── disinfentry.sql         Schema + seed data (XAMPP; migrations are separate)
+│   ├── disinfentry_deploy.sql  Schema (migrations applied) + seed, for hosted DBs (Railway)
 │   └── migrations/             Incremental SQL for an existing database
 ├── esp32/DisinfEntry_Booth/    Arduino firmware (+ secrets.example.h → secrets.h)
 ├── includes/
