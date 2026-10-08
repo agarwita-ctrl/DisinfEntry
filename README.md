@@ -365,6 +365,10 @@ folder) and set `WIFI_SSID`, `WIFI_PASSWORD`, `SERVER_HOSTNAME` (the Windows com
 of the XAMPP machine — run `hostname` in cmd) and `API_KEY`. `secrets.h` is git-ignored, so
 your WiFi password and API key never reach the repository.
 
+To report to a **hosted** site (for example Railway) instead, define `SERVER_URL_VALUE` in
+`secrets.h` — see [RAILWAY.md](RAILWAY.md), Part 10. The rest of this section describes the default
+local-network mode.
+
 The server's **IP address is not configured**: the booth finds it at run time, so a new
 DHCP lease never stops a sync. It tries the address that worked last time (kept in flash
 across reboots), then `SERVER_HOSTNAME` over mDNS, then a sweep of the local subnet —

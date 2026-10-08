@@ -9,11 +9,16 @@
     - System waits until the person leaves range before resetting.
 
   Sync: posts cycles and telemetry to the DisinfEntry server
-    POST http://<server>/DisinfEntry/api/booth_sync.php   with the X-API-Key header
+    POST <server>/api/booth_sync.php   with the X-API-Key header
 
-    The server is located at run time - by the address that worked last time,
-    then by mDNS name, then by sweeping the subnet - so a new DHCP lease on the
-    XAMPP machine does not mean reflashing. See SERVER_HOSTNAME below.
+    Two ways to reach the server, chosen by SERVER_URL_VALUE in secrets.h:
+
+      - SERVER_URL_VALUE set (e.g. "https://your-app.up.railway.app"): a fixed
+        address, over TLS when it starts with https://. No searching.
+      - SERVER_URL_VALUE not set: a XAMPP machine on the local network. The
+        server is located at run time - by the address that worked last time,
+        then by mDNS name, then by sweeping the subnet - so a new DHCP lease
+        does not mean reflashing. See SERVER_HOSTNAME below.
 
     The server records each cycle, publishes it to the entry log, and answers
     with the settings the booth should adopt - so the threshold and the spray
@@ -38,7 +43,8 @@
 
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ESPmDNS.h>      // resolve the server by name, so a new DHCP lease costs nothing
+#include <WiFiClientSecure.h>   // TLS, for an https:// SERVER_URL
+#include <ESPmDNS.h>     // resolve the server by name, so a new DHCP lease costs nothing
 #include <Preferences.h>  // remember the address that worked, across reboots
 #include <esp_system.h>   // esp_random(), for the boot id
 #include <ESP32Servo.h>
@@ -50,6 +56,24 @@
 // git-ignored. First time: copy secrets.example.h to secrets.h (same folder as this
 // file) and fill it in.
 #include "secrets.h"
+
+// ---------- Fixed server (Railway, or any hosted site) ----------
+// Optional. Define SERVER_URL_VALUE in secrets.h to talk to a fixed address instead of
+// searching the local network:
+//     #define SERVER_URL_VALUE "https://your-app.up.railway.app"   // no trailing slash
+// With https:// the connection uses TLS. Leave it undefined for a local XAMPP server;
+// the discovery logic below is then used exactly as before.
+#ifndef SERVER_URL_VALUE
+  #define SERVER_URL_VALUE ""
+#endif
+const char* SERVER_URL = SERVER_URL_VALUE;
+
+// A TLS handshake takes a second or two, so https gets more time than plain http.
+// Still bounded: syncing only runs while the booth is idle with nobody in range.
+const uint16_t HTTPS_TIMEOUT_MS = 8000;
+// (The helper functions for this live below the type definitions - see
+// usingFixedServer(). The Arduino build puts generated prototypes before the first
+// function in the file, so functions must not come before the enums they depend on.)
 
 // ---------- Where the server is: found, not hardcoded ----------
 // The XAMPP machine holds a DHCP lease, so its address changes on its own. The
@@ -214,6 +238,29 @@ uint32_t        serverNet = 0;         // network it was found on, to spot a mov
 DiscoveryPhase  discPhase = DISC_REMEMBERED;
 uint16_t        scanOctet = 1;         // sweep position, so a pass resumes where it stopped
 uint8_t         connFailures = 0;
+
+// ---------- Fixed-server helpers (see SERVER_URL_VALUE in secrets.h) ----------
+bool usingFixedServer() { return SERVER_URL[0] != '\0'; }
+bool serverIsHttps()    { return strncmp(SERVER_URL, "https://", 8) == 0; }
+
+/**
+ * Prepares a TLS client.
+ *
+ * KNOWN LIMITATION: this encrypts the connection but does NOT verify the server's
+ * certificate (setInsecure). Verifying needs the right clock - the ESP32 has none until
+ * it is given NTP - and a CA certificate to compare against; neither is set up here. The
+ * practical risk is someone actively impersonating your site on the booth's network and
+ * reading the API key, which can be regenerated in System Settings. Treat the key as
+ * disposable, and do not reuse it anywhere else.
+ */
+void configureTls(WiFiClientSecure& client) {
+  static bool warned = false;
+  if (!warned) {
+    warned = true;
+    Serial.println("!! TLS: encrypted, but the server certificate is not verified (see configureTls).");
+  }
+  client.setInsecure();
+}
 bool            mdnsStarted = false;
 
 // ---------- Cycle in progress ----------
@@ -711,6 +758,11 @@ uint32_t subnetKey() {
 }
 
 String serverBase() {
+  if (usingFixedServer()) {
+    String base = SERVER_URL;
+    while (base.endsWith("/")) base.remove(base.length() - 1);   // tolerate a trailing slash
+    return base;
+  }
   return "http://" + serverHost + ":" + String(SERVER_PORT) + String(SERVER_PATH);
 }
 
@@ -765,6 +817,7 @@ bool adoptServer(const String& host, const char* how) {
  * Every pass now re-probes it first, patiently, until something better turns up.
  */
 void forgetServer() {
+  if (usingFixedServer()) return;   // a fixed address is never "lost", only retried
   if (serverHost.length() == 0 || SERVER_PIN_IP[0] != '\0') return;
 
   Serial.print("!! Server stopped answering at ");
@@ -784,6 +837,7 @@ void forgetServer() {
  * already in flight - whatever the network looks like.
  */
 bool resolveServer() {
+  if (usingFixedServer()) return true;   // nothing to search for
   if (serverHost.length()) return true;
 
   if (SERVER_PIN_IP[0] != '\0') {
@@ -888,14 +942,27 @@ bool syncNow() {
   String url = serverBase() + "/api/booth_sync.php";
   String payload = buildPayload();
 
+  // The TLS client must outlive the request, so it lives here, next to the HTTPClient.
+  WiFiClientSecure secureClient;
   HTTPClient http;
-  if (!http.begin(url)) {
-    Serial.println("!! Sync failed: could not build a URL for the server. Check SERVER_PATH.");
+  const bool tls = usingFixedServer() && serverIsHttps();
+  bool started;
+  if (tls) {
+    configureTls(secureClient);
+    started = http.begin(secureClient, url);
+  } else {
+    started = http.begin(url);
+  }
+  if (!started) {
+    Serial.println(usingFixedServer()
+      ? "!! Sync failed: could not build a URL for the server. Check SERVER_URL_VALUE in secrets.h."
+      : "!! Sync failed: could not build a URL for the server. Check SERVER_PATH.");
     return false;
   }
 
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  const uint16_t timeoutMs = tls ? HTTPS_TIMEOUT_MS : HTTP_TIMEOUT_MS;
+  http.setConnectTimeout(timeoutMs);
+  http.setTimeout(timeoutMs);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", API_KEY);
 
@@ -908,7 +975,7 @@ bool syncNow() {
     Serial.print("!! Sync failed (HTTP ");
     Serial.print(code);
     Serial.print(") at ");
-    Serial.print(serverHost);
+    Serial.print(usingFixedServer() ? String(SERVER_URL) : serverHost);
     Serial.println(". Queued for retry.");
 
     // A negative code is a connection failure, not a rejection: the server did
@@ -1049,7 +1116,11 @@ void setup() {
 
   Serial.print("Smart Disinfectant ready. Boot ");
   Serial.println(bootId);
-  if (SERVER_PIN_IP[0] != '\0') {
+  if (usingFixedServer()) {
+    Serial.print("Server: ");
+    Serial.print(SERVER_URL);
+    Serial.println(serverIsHttps() ? " (fixed address, TLS)" : " (fixed address)");
+  } else if (SERVER_PIN_IP[0] != '\0') {
     Serial.print("Server pinned to ");
     Serial.println(SERVER_PIN_IP);
   } else {

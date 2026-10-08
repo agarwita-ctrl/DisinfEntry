@@ -203,11 +203,30 @@ Then, signed in:
 
 ## Part 10 - The ESP32 booth
 
-The firmware currently looks for a server on the **local network** and uses plain `http`. To report
-to a Railway site it must instead use your **public hostname**, **https** (port 443) with a
-TLS-capable client, and `SERVER_PATH` becomes empty (the site is at the domain root, not under
-`/DisinfEntry`). That is a firmware change not covered here. Until it is done, keep the booth
-pointed at a local XAMPP server.
+The firmware supports both a local XAMPP server and a hosted one. Which it uses is decided by one
+line in `esp32/DisinfEntry_Booth/secrets.h` (git-ignored; copy `secrets.example.h` if you do not
+have it):
+
+1. Uncomment and fill in your Railway address - `https`, no trailing slash, **no folder**:
+   ```
+   #define SERVER_URL_VALUE "https://your-app.up.railway.app"
+   ```
+2. Set `API_KEY` to the **new key you regenerated on Railway** (Part 6), not the old local one.
+3. Re-flash. The Serial Monitor (115200 baud) should print
+   `Server: https://… (fixed address, TLS)` and then `>> Synced …` after the first sync.
+
+With `SERVER_URL_VALUE` left out, the booth behaves as before: it finds a XAMPP server on the local
+network by mDNS name or subnet sweep.
+
+**Known limitation:** the connection is encrypted but the server's certificate is **not verified**
+(the ESP32 has no clock until given NTP, and no CA certificate is bundled). Someone actively
+impersonating your site on the booth's own WiFi could read the API key. Treat the key as disposable
+- it can be regenerated in System Settings - and never reuse it. Verified TLS (NTP + a pinned CA)
+is a worthwhile next step.
+
+**Build notes:** compiled for `esp32:esp32:esp32` (core 3.3.x) with ESP32Servo and Adafruit
+MLX90614: 85% of flash and 16% of RAM in both modes. If you add features and run out of flash, pick
+the *Huge APP* partition scheme in the Arduino IDE.
 
 ---
 
