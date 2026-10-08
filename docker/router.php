@@ -56,6 +56,13 @@ header('X-Frame-Options: SAMEORIGIN');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()');
 
+// HSTS only when the request really arrived over HTTPS. Behind Railway's proxy that is
+// signalled by X-Forwarded-Proto, which is trusted only when the deployment opted in.
+if (getenv('DISINFENTRY_BEHIND_PROXY') === '1'
+    && strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https') {
+    header('Strict-Transport-Security: max-age=31536000');
+}
+
 // A real file, or a directory (its index.php): let the server handle it.
 $target = __DIR__ . '/..' . $clean;
 if ($clean === '/' || is_file($target) || is_dir($target)) {
