@@ -74,8 +74,40 @@ if (getenv('DISINFENTRY_BEHIND_PROXY') === '1'
     header('Strict-Transport-Security: max-age=31536000');
 }
 
-// A real file, or a directory (its index.php): let the server handle it.
 $target = __DIR__ . '/..' . $clean;
+
+// Static files are served here rather than left to the server: the built-in server
+// serves them natively and ignores header() calls made in this router, so CSS and JS
+// went out without the security headers above.
+if (is_file($target) && !preg_match('/\.php\d?$/i', $target)) {
+    $root = realpath(__DIR__ . '/..');
+    $real = realpath($target);
+    if ($real === false || $root === false || strncmp($real, $root . DIRECTORY_SEPARATOR, strlen($root) + 1) !== 0) {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "403 Forbidden\n";
+        return true;
+    }
+
+    static $types = [
+        'css' => 'text/css; charset=utf-8',       'js'   => 'application/javascript; charset=utf-8',
+        'json' => 'application/json; charset=utf-8', 'map' => 'application/json; charset=utf-8',
+        'png' => 'image/png',  'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif',
+        'webp' => 'image/webp', 'ico' => 'image/x-icon', 'svg' => 'image/svg+xml',
+        'woff' => 'font/woff', 'woff2' => 'font/woff2', 'ttf' => 'font/ttf', 'txt' => 'text/plain; charset=utf-8',
+    ];
+    $ext = strtolower(pathinfo($real, PATHINFO_EXTENSION));
+    header('Content-Type: ' . ($types[$ext] ?? 'application/octet-stream'));
+    header('Content-Length: ' . (string) filesize($real));
+    // Page links carry ?v=<mtime>, so a changed file gets a new URL; a day is safe.
+    header('Cache-Control: public, max-age=86400');
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') {
+        readfile($real);
+    }
+    return true;
+}
+
+// A PHP script or a directory (its index.php): let the server run it.
 if ($clean === '/' || is_file($target) || is_dir($target)) {
     return false;
 }

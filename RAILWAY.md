@@ -82,6 +82,11 @@ Save and let it redeploy.
 - `DISINFENTRY_BEHIND_PROXY=1` makes the app trust Railway's proxy headers, so the session cookie
   is `Secure`, HSTS is sent, and the login lockout and audit log see the visitor's real address.
   Set it **only** when running behind Railway (or another proxy you control).
+- The visitor's address is read from the **right-hand end** of `X-Forwarded-For`, because a visitor
+  can pre-fill the left-hand end with a fake address to dodge the login limit. If your Audit Logs
+  (IP column) show an internal Railway address (e.g. `100.64…`) for every login, there is more than
+  one proxy in front of the app: add `DISINFENTRY_PROXY_HOPS=2` (or the number of proxies) and
+  redeploy. The default is `1`.
 - Do **not** add a `config/database.local.php` on Railway: it would override these variables.
 
 ---

@@ -298,10 +298,20 @@ function client_ip(): string
     // Behind a trusted proxy REMOTE_ADDR is the proxy itself, which would put every
     // visitor in one login-throttle bucket and one IP in the audit log. Use the
     // address the proxy reports - only when the deployment has opted in.
+    //
+    // X-Forwarded-For is a list the CLIENT can pre-fill ("1.2.3.4") before the proxy
+    // appends the address it actually saw. So the first entry is attacker-controlled
+    // and must not be trusted; count from the RIGHT, skipping only as many entries as
+    // there are proxies you control (DISINFENTRY_PROXY_HOPS, default 1).
     if (defined('BEHIND_PROXY') && BEHIND_PROXY) {
-        $forwarded = trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''))[0]);
-        if ($forwarded !== '' && filter_var($forwarded, FILTER_VALIDATE_IP) !== false) {
-            return substr($forwarded, 0, 45);
+        $hops  = max(1, (int) (getenv('DISINFENTRY_PROXY_HOPS') ?: 1));
+        $parts = array_values(array_filter(
+            array_map('trim', explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''))),
+            static fn(string $p): bool => $p !== ''
+        ));
+        $at = count($parts) - $hops;
+        if ($at >= 0 && filter_var($parts[$at], FILTER_VALIDATE_IP) !== false) {
+            return substr($parts[$at], 0, 45);
         }
     }
 
