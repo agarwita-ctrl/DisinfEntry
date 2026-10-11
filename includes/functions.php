@@ -85,6 +85,25 @@ function temp_threshold(): float
 }
 
 /**
+ * Below this (°C) a booth reading is not a plausible body temperature: it is what the
+ * MLX90614 reports when it is looking at clothing, a hat brim, the air or an empty
+ * doorway. Such an entry is still granted - the booth screens for fever, not for a
+ * bad aim - but it is flagged for a person to review instead of passing silently.
+ */
+const SUSPECT_LOW_TEMP_C = 32.0;
+
+function is_suspect_low_temp(float $tempC): bool
+{
+    return $tempC < SUSPECT_LOW_TEMP_C;
+}
+
+/** Text appended to an entry's remarks when its reading is suspiciously low. */
+function low_temp_note(float $tempC): string
+{
+    return sprintf(' [Low reading %.1f°C - verify]', $tempC);
+}
+
+/**
  * The bounds the ESP32 sketch enforces in adoptDirectives(), keyed by the name
  * it looks for in the sync response: [default, min, max].
  *

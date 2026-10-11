@@ -462,6 +462,13 @@ foreach ($cycles as $c) {
         ? $remarks
         : ($access === 'granted' ? 'Cleared for entry' : 'Access denied');
 
+    // Granted, but not a believable body temperature: flag it for review (remarks here,
+    // a notification below, a distinct badge in the UI). remarks is VARCHAR(255).
+    $lowReading = $access === 'granted' && is_suspect_low_temp($temp);
+    if ($lowReading) {
+        $entryNote = mb_substr($entryNote . low_temp_note($temp), 0, 255);
+    }
+
     if ($entryId !== null) {
         $updateEntry->execute([
             $temp, $entryDate, $entryTime, $disinfection, $misting,
@@ -496,6 +503,17 @@ foreach ($cycles as $c) {
             'Entry Denied',
             sprintf('Booth %s denied entry at %.1f°C. %s', $deviceId, $temp, $remarks ?: 'No reason given.'),
             'danger',
+            $entryId,
+        ];
+    } elseif ($lowReading) {
+        // Type 'system' is rate-limited to one per hour per title when the batch is
+        // committed, so a booth aimed at the wrong place cannot flood the list.
+        $pendingNotices[] = [
+            'system',
+            'Low Temperature Reading',
+            sprintf('Booth %s granted entry at %.1f°C, below the %.1f°C plausibility minimum. '
+                . 'The sensor may be reading clothing or air - check its aim.', $deviceId, $temp, SUSPECT_LOW_TEMP_C),
+            'warning',
             $entryId,
         ];
     }

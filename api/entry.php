@@ -113,6 +113,12 @@ $remarks = $remarksIn !== ''
     ? $remarksIn
     : ($reasons ? implode('; ', $reasons) : 'Cleared for entry');
 
+// Granted, but not a believable body temperature: flag it for review.
+$lowReading = $accessStatus === 'granted' && is_suspect_low_temp($temperature);
+if ($lowReading) {
+    $remarks = mb_substr($remarks . low_temp_note($temperature), 0, 255);
+}
+
 /* ---- Persist ---- */
 $now = new DateTimeImmutable('now');
 
@@ -180,6 +186,15 @@ if ($isHighTemp) {
         'Entry Denied',
         sprintf('%s was denied entry. %s', $personName, $remarks),
         'danger',
+        $entryId
+    );
+} elseif ($lowReading) {
+    notify(
+        'system',
+        'Low Temperature Reading',
+        sprintf('%s was granted entry at %.1f°C, below the %.1f°C plausibility minimum. '
+            . 'The sensor may be reading clothing or air - check its aim.', $personName, $temperature, SUSPECT_LOW_TEMP_C),
+        'warning',
         $entryId
     );
 }

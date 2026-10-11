@@ -33,6 +33,7 @@ $navItems   = [
 <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
 <meta name="base-url" content="<?= e(BASE_URL) ?>">
 <meta name="temp-threshold" content="<?= e(setting('temperature_threshold', '37.8')) ?>">
+<meta name="low-temp" content="<?= e((string) SUSPECT_LOW_TEMP_C) ?>">
 <meta name="refresh-interval" content="<?= e(setting('refresh_interval', '3')) ?>">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128737;</text></svg>">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">

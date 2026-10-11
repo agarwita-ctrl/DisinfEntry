@@ -495,6 +495,12 @@ Booth telemetry, written by `api/booth_sync.php`:
 - **Forgot password** never shows a reset link. With `MAIL_ENABLED` false (the default, since
   XAMPP has no mail transport) the request is raised to the administrators as a notification.
 
+- **Low readings are flagged, not blocked.** A reading below 32.0 °C (`SUSPECT_LOW_TEMP_C` in
+  `includes/functions.php`) is not a believable body temperature - the thermometer was probably
+  aimed at clothing or air. The entry is still granted, but its remarks gain
+  `[Low reading 27.5°C - verify]`, it shows an amber warning badge in every table, and a
+  *Low Temperature Reading* notification is raised (at most one per hour).
+
 - **Excel export** produces a genuine `.xlsx` workbook, written by
   [`includes/XlsxWriter.php`](includes/XlsxWriter.php) — a small OOXML writer that uses
   `ext-zip` when it is loaded and a built-in zip writer when it is not, so there is no

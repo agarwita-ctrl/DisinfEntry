@@ -298,6 +298,7 @@ table.dataTable tbody td { vertical-align: middle; font-size: .86rem; }
 .badge-temp { font-weight: 700; font-size: .8rem; padding: .35em .6em; border-radius: 6px; }
 .badge-temp.normal { background: #dcfce7; color: #166534; }
 .badge-temp.high   { background: #fee2e2; color: #991b1b; }
+.badge-temp.low    { background: #fef3c7; color: #92400e; }
 
 .badge-soft { font-weight: 600; font-size: .74rem; padding: .35em .65em; border-radius: 6px; }
 .badge-soft.granted    { background: #dcfce7; color: #166534; }

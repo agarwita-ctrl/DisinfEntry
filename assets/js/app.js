@@ -11,6 +11,8 @@ const App = (() => {
   const BASE = meta('base-url');
   const CSRF = meta('csrf-token');
   const THRESHOLD = parseFloat(meta('temp-threshold', '37.8'));
+  // Below this a reading is not a believable body temperature (sensor aimed at clothing or air).
+  const LOW_TEMP = parseFloat(meta('low-temp', '32'));
   const REFRESH = Math.max(1, parseInt(meta('refresh-interval', '3'), 10)) * 1000;
 
   /* ---------------- HTTP ---------------- */
@@ -61,6 +63,10 @@ const App = (() => {
     const t = parseFloat(temp);
     if (Number.isNaN(t)) return '<span class="badge-temp normal">—</span>';
     const high = t > THRESHOLD;
+    if (!high && t < LOW_TEMP) {
+      return `<span class="badge-temp low" title="Unusually low - the sensor may have read clothing or air. Verify.">` +
+             `<i class="bi bi-exclamation-triangle-fill me-1"></i>${t.toFixed(1)}&deg;C</span>`;
+    }
     return `<span class="badge-temp ${high ? 'high' : 'normal'}">${t.toFixed(1)}&deg;C</span>`;
   }
 
