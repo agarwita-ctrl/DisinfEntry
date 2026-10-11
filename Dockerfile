@@ -25,5 +25,7 @@ USER www-data
 # a booth sync) would block everyone. Several workers fix that.
 ENV PHP_CLI_SERVER_WORKERS=8
 
-# Railway injects PORT (8080 if it is somehow unset). Errors go to the log, not the page.
-CMD ["sh", "-c", "exec php -d display_errors=0 -d log_errors=1 -d error_log=/dev/stderr -S 0.0.0.0:${PORT:-8080} -t /app /app/docker/router.php"]
+# Railway injects PORT (8080 if it is somehow unset). Errors go to the log, not the page:
+# with no error_log set, the CLI server writes them to stderr, which Railway collects. (An
+# explicit error_log=/dev/stderr can fail with "permission denied" for a non-root user.)
+CMD ["sh", "-c", "exec php -d display_errors=0 -d log_errors=1 -S 0.0.0.0:${PORT:-8080} -t /app /app/docker/router.php"]

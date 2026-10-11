@@ -18,6 +18,17 @@ declare(strict_types=1);
 
 $path = rawurldecode((string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH));
 
+// A backslash is a path separator on Windows, so "/includes%5cauth.php" would reach
+// includes/auth.php there while sailing past the folder check below. Treat it as "/".
+// A NUL byte can truncate a path in lower-level code; no legitimate request has one.
+$path = str_replace('\\', '/', $path);
+if (str_contains($path, "\0")) {
+    http_response_code(400);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "400 Bad Request\n";
+    return true;
+}
+
 // Normalise so "/config/../config/x" and "//config/x" cannot slip past the checks.
 $parts = [];
 foreach (explode('/', $path) as $seg) {
