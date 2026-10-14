@@ -5,6 +5,7 @@
  *   GET ?action=stats   — KPI cards
  *   GET ?action=charts  — daily / weekly / monthly / pass-vs-denied / temp distribution
  *   GET ?action=recent  — recent activity table
+ *   GET ?action=exits   — recent exits (exit id, date, time)
  *   GET ?action=all     — everything in one round trip (default)
  */
 
@@ -214,6 +215,36 @@ function build_recent(PDO $pdo, int $limit = 10): array
 }
 
 /* ============================================================
+ * Recent exits (the booth's exit-side sensor)
+ * ========================================================== */
+function build_exits(PDO $pdo, int $limit = 10): array
+{
+    $limit = max(1, min(50, $limit));
+    $stmt  = $pdo->query(
+        'SELECT id, device_id, distance_cm, exited_at
+           FROM booth_exits
+          ORDER BY exited_at DESC, id DESC
+          LIMIT ' . $limit
+    );
+
+    $today = date('Y-m-d');
+    $rows  = array_map(static fn(array $r): array => [
+        'id'          => (int) $r['id'],
+        'exit_id'     => sprintf('EXT-%06d', (int) $r['id']),
+        'device_id'   => $r['device_id'],
+        'distance_cm' => $r['distance_cm'] !== null ? (float) $r['distance_cm'] : null,
+        'date'        => fmt_date(substr((string) $r['exited_at'], 0, 10)),
+        'time'        => fmt_time(substr((string) $r['exited_at'], 11, 8)),
+        'exited_at'   => $r['exited_at'],
+    ], $stmt->fetchAll());
+
+    $cnt = $pdo->prepare('SELECT COUNT(*) FROM booth_exits WHERE exited_at >= ? AND exited_at < DATE_ADD(?, INTERVAL 1 DAY)');
+    $cnt->execute([$today, $today]);
+
+    return ['rows' => $rows, 'today' => (int) $cnt->fetchColumn()];
+}
+
+/* ============================================================
  * Dispatch
  * ========================================================== */
 $payload = ['success' => true, 'threshold' => $threshold, 'generated_at' => date('Y-m-d H:i:s')];
@@ -226,6 +257,9 @@ if ($action === 'charts' || $action === 'all') {
 }
 if ($action === 'recent' || $action === 'all') {
     $payload['recent'] = build_recent($pdo, (int) ($_GET['limit'] ?? 10));
+}
+if ($action === 'exits' || $action === 'all') {
+    $payload['exits'] = build_exits($pdo, (int) ($_GET['limit'] ?? 10));
 }
 
 json_response($payload);

@@ -8,6 +8,22 @@
       door sequence is BLOCKED (access denied, door stays closed).
     - System waits until the person leaves range before resetting.
 
+  Exit side: a second HC-SR04 on the OTHER side of the door.
+    - Someone standing within EXIT_DETECTION_CM of it for EXIT_CONFIRM_TIME
+      gets the door opened for them - no screening, no spray. Leaving does not
+      need disinfecting.
+    - The exit sensor is only acted on while the booth is IDLE, so it can never
+      open the door in the middle of a screening or a spray burst.
+    - While the door is open (for an entry OR an exit), it stays open as long as
+      EITHER sensor sees someone, so it never closes on a person mid-doorway.
+    - After the door closes, each sensor must read clear once before it can
+      trigger again. Otherwise the person who just walked through would be
+      picked up by the sensor on the side they arrived at, and either sprayed
+      (exit -> entry side) or let straight back out (entry -> exit side).
+    - Exits are reported to the server in their own "exits" list (uptime and
+      distance only), separate from the cycle log, which only knows entry
+      outcomes. The server stores them for the dashboard's Recent Exits table.
+
   Sync: posts cycles and telemetry to the DisinfEntry server
     POST <server>/api/booth_sync.php   with the X-API-Key header
 
@@ -24,13 +40,16 @@
     with the settings the booth should adopt - so the threshold and the spray
     timings can be retuned from System Settings without reflashing.
 
-    Syncing only ever happens while the booth is IDLE with nobody in range, so
-    a slow network can never stretch a spray burst or hold the door open.
+    Syncing only ever happens while the booth is IDLE with nobody in range that
+    a sensor would act on, so a slow network can never stretch a spray burst,
+    hold the door open, or keep someone waiting to leave. After a failed sync the
+    retry gap doubles (3 s up to 60 s) and the TLS handshake is time-limited, so
+    even a dead server leaves the booth responsive.
 
   IMPORTANT WIRING NOTE:
   HC-SR04 ECHO pin outputs 5V. ESP32 GPIOs are 3.3V only.
   You MUST use a voltage divider (e.g. 1k + 2k resistors) or a
-  logic level shifter on the ECHO line, or you can damage the pin.
+  logic level shifter on BOTH ECHO lines, or you can damage the pins.
 
   Libraries required:
    - ESP32Servo
@@ -40,6 +59,13 @@
    a literal this sketch controls, so a JSON library would only add a
    dependency and a v6/v7 API to get wrong.)
 */
+
+// Fail with a clear message if the wrong board is selected. WiFi.h, HTTPClient.h and the
+// rest ship with the ESP32 board package, so on an Arduino Uno/Nano/Mega the build would
+// otherwise stop with the unhelpful "WiFi.h: No such file or directory".
+#if !defined(ARDUINO_ARCH_ESP32)
+  #error "Wrong board selected. In the Arduino IDE choose Tools > Board > esp32 > ESP32 Dev Module (install 'esp32 by Espressif Systems' in Boards Manager first if it is not listed)."
+#endif
 
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -99,26 +125,49 @@ const uint16_t SERVER_PORT  = 80;
 
 const char* DEVICE_ID    = "ESP32-BOOTH-01";
 const char* DEVICE_NAME   = "Main Gate Booth";
-const char* FIRMWARE      = "1.1.0";
+const char* FIRMWARE      = "1.3.0";
 
 // ---------- Pin configuration ----------
-const int TRIG_PIN   = 5;
+const int TRIG_PIN   = 5;    // entry-side sensor (outside, where people get screened)
 const int ECHO_PIN   = 18;   // through voltage divider!
 const int RELAY_PIN  = 26;
 const int SERVO_PIN  = 25;
 const int I2C_SDA    = 21;
 const int I2C_SCL    = 22;
 
+// Exit-side sensor (inside, the other side of the door).
+// GPIO34 is input-only, which is exactly what an ECHO line needs - but it has no
+// internal pull-up/down, so the voltage divider is still required (and enough).
+const int TRIG_EXIT_PIN = 27;
+const int ECHO_EXIT_PIN = 34;   // through voltage divider!
+
 const bool RELAY_ACTIVE_LOW = true;
 
 const int DOOR_CLOSED_ANGLE = 0;
-const int DOOR_OPEN_ANGLE   = 120;
+const int DOOR_OPEN_ANGLE   = 90;
 
-const int SERVO_MIN_US = 500;
+// The ESP32Servo library caps the pulse at 2500 us (MAX_PULSE_WIDTH), so anything larger
+// is silently ignored - while this value was still reported to the server as the booth's
+// configuration. Keep it within the real range so what is reported is what is used.
+const int SERVO_MIN_US = 1000;
 const int SERVO_MAX_US = 2500;
 
 // ---------- Fixed detection settings ----------
 const unsigned long ULTRASONIC_TIMEOUT_US = 25000;
+
+// The HC-SR04 is specified for 2-400 cm. Anything outside that is not a measurement: a
+// sub-2 cm "echo" is electrical noise (a floating or unplugged ECHO line produces exactly
+// this), and counting it as someone standing right at the sensor would open the exit door
+// or start a spray cycle by itself.
+const float ULTRASONIC_MIN_CM = 2.0;
+const float ULTRASONIC_MAX_CM = 400.0;
+
+// Exit side. Compiled in rather than server-adjustable: the server's settings
+// table has no column for them, and an exit needs no screening to tune.
+const float         EXIT_DETECTION_CM = 50.0;
+// Short on purpose - someone leaving should not stand and wait - but long enough
+// that a single stray echo cannot swing the door open.
+const unsigned long EXIT_CONFIRM_TIME = 400;
 
 // ---------- Fixed timing (all in milliseconds) ----------
 const unsigned long PRESENCE_GLITCH_GRACE = 500;
@@ -128,7 +177,11 @@ const unsigned long PRESENCE_GLITCH_GRACE = 500;
 // deadline - but something parked in front of the sensor must not wedge the
 // door open for good, so the wait is bounded.
 const unsigned long DOOR_CLEAR_GRACE = 30000;
-const unsigned long SAMPLE_INTERVAL       = 100;   // how often to actually ping the sensor (keep fast for responsiveness)
+
+// The two sensors are pinged alternately, never together, so one cannot hear the
+// other's echo. Each sensor therefore gets a fresh reading every 2 x this
+// (100 ms) - the same rate the single entry sensor had before.
+const unsigned long SAMPLE_INTERVAL       = 50;
 const unsigned long PRINT_INTERVAL        = 1000;  // how often to print/record distance (slowed down)
 const unsigned long TEMP_PRINT_INTERVAL   = 2000;  // how often to print/record temperature
 
@@ -147,11 +200,15 @@ float         feverThresholdC     = 37.8;
 unsigned long presenceConfirmTime = 5000;
 unsigned long pumpOnTime          = 2000;
 unsigned long pumpOffTime         = 2000;
-unsigned long doorOpenTime        = 5000;
+unsigned long doorOpenTime        = 5000;   // also used for the exit door hold
 
 // ---------- Sync behaviour ----------
 const unsigned long HEARTBEAT_INTERVAL  = 30000;  // sync at least this often
 const unsigned long MIN_SYNC_GAP        = 3000;   // never retry faster than this
+// After consecutive failed syncs the gap doubles (3, 6, 12, 24, 48 s) up to this cap.
+// Every attempt blocks the booth for up to the HTTP(S) timeout, so retrying every 3 s
+// against a dead server would leave it unresponsive most of the time.
+const unsigned long MAX_SYNC_GAP        = 60000;
 const unsigned long WIFI_RETRY_INTERVAL = 15000;
 const uint16_t      HTTP_TIMEOUT_MS     = 3000;
 
@@ -191,6 +248,7 @@ const uint32_t      MDNS_QUERY_MS     = 1500;   // mdns_query_a blocks this long
 const uint8_t       LOST_AFTER_FAILS  = 10;
 
 const size_t MAX_PENDING_CYCLES = 5;
+const size_t MAX_PENDING_EXITS  = 10;
 const size_t MAX_CYCLE_STATES   = 12;
 const size_t DISTANCE_BUFFER    = 40;
 const size_t TEMP_BUFFER        = 20;
@@ -198,11 +256,15 @@ const size_t TEMP_BUFFER        = 20;
 Servo doorServo;
 Adafruit_MLX90614 mlx = Adafruit_MLX90614();
 
+// The EXIT_* states are added at the end and are never sent to the server: an
+// exit does not start a cycle, so its transitions are not recorded, and syncing
+// only happens in IDLE.
 enum SystemState {
   IDLE, CONFIRMING,
   PUMP_ON_1, PUMP_OFF_INTERVAL, PUMP_ON_2,
   DOOR_OPENING, DOOR_HOLD_OPEN, DOOR_CLOSING,
-  ACCESS_DENIED
+  ACCESS_DENIED,
+  EXIT_OPENING, EXIT_HOLD_OPEN, EXIT_CLOSING
 };
 
 SystemState currentState = IDLE;
@@ -215,6 +277,15 @@ unsigned long lastTempPrint = 0;
 bool currentlyInRange = false;
 float lastDistance = -1;
 
+// ---------- Exit-side sensor state ----------
+bool          pingExitNext = false;   // alternates the two sensors
+bool          exitInRange = false;
+float         lastExitDistance = -1;
+unsigned long exitSeenSince = 0;      // when the exit sensor started seeing someone
+bool          exitAwaitClear = false; // exit sensor must read clear before it can trigger
+uint32_t      exitCount = 0;          // serial log only
+bool          exitForcedClose = false;
+
 // ---------- Sync state ----------
 String bootId;                    // new on every reset; scopes every uptime_ms
 bool   mlxOk = true;
@@ -225,6 +296,7 @@ unsigned long lastSyncAttempt = 0;
 unsigned long lastSyncOk = 0;
 uint32_t droppedSamples = 0;
 uint32_t droppedCycles = 0;
+uint32_t droppedExits = 0;
 
 // ---------- Server discovery state ----------
 // One phase runs per pass, in this order, cycling back to mDNS after a full
@@ -238,6 +310,7 @@ uint32_t        serverNet = 0;         // network it was found on, to spot a mov
 DiscoveryPhase  discPhase = DISC_REMEMBERED;
 uint16_t        scanOctet = 1;         // sweep position, so a pass resumes where it stopped
 uint8_t         connFailures = 0;
+uint8_t         syncFailStreak = 0;    // consecutive failed POSTs; drives the retry back-off
 
 // ---------- Fixed-server helpers (see SERVER_URL_VALUE in secrets.h) ----------
 bool usingFixedServer() { return SERVER_URL[0] != '\0'; }
@@ -260,6 +333,12 @@ void configureTls(WiFiClientSecure& client) {
     Serial.println("!! TLS: encrypted, but the server certificate is not verified (see configureTls).");
   }
   client.setInsecure();
+
+  // Bound the TLS handshake. Its default timeout is 120 SECONDS, and HTTPClient's own
+  // timeouts do not cover it: a server that accepts the connection and then stalls would
+  // freeze the whole booth - no entries, no exits - for two minutes. (Both take seconds.)
+  client.setHandshakeTimeout(HTTPS_TIMEOUT_MS / 1000);
+  client.setTimeout(HTTPS_TIMEOUT_MS / 1000);
 }
 bool            mdnsStarted = false;
 
@@ -300,6 +379,12 @@ uint8_t     cycleStateCount = 0;
 // ---------- Queues ----------
 String pendingCycles[MAX_PENDING_CYCLES];
 size_t pendingCycleCount = 0;
+
+// One exit-side door opening, waiting to be reported. uptime scopes to bootId,
+// exactly like a cycle's detected_uptime_ms.
+struct ExitRecord { uint32_t uptime; float cm; };
+ExitRecord pendingExits[MAX_PENDING_EXITS];
+size_t     pendingExitCount = 0;
 
 struct DistanceSample { float cm; bool inRange; uint32_t uptime; };
 struct TempSample     { float object; float ambient; bool screening; uint32_t uptime; };
@@ -364,22 +449,55 @@ bool mlxTryBegin() {
   return mlx.begin();
 }
 
-float readDistanceCM() {
-  digitalWrite(TRIG_PIN, LOW);
+/**
+ * Pings one HC-SR04. Returns -1 when there is no usable reading: nothing echoed back
+ * within the timeout, or the "echo" is outside the sensor's 2-400 cm range (noise).
+ */
+float readDistanceCM(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
+  digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
+  digitalWrite(trigPin, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH, ULTRASONIC_TIMEOUT_US);
+  long duration = pulseIn(echoPin, HIGH, ULTRASONIC_TIMEOUT_US);
   if (duration == 0) return -1;
 
-  return duration * 0.0343 / 2.0;
+  float cm = duration * 0.0343 / 2.0;
+  if (cm < ULTRASONIC_MIN_CM || cm > ULTRASONIC_MAX_CM) return -1;
+  return cm;
+}
+
+/** Someone is near the door on either side - used so the door never closes on them. */
+bool anyoneAtDoor() {
+  return currentlyInRange || exitInRange;
+}
+
+/**
+ * A sensor sees someone it would ACT on right now - and a blocking sync must not start.
+ * A sensor that is still waiting to read clear (awaitClear / exitAwaitClear) will ignore
+ * whatever it sees, so that does not hold syncing back. Without this, something that
+ * stays in front of a sensor after a cycle - a person lingering, or a box left against the
+ * exit sensor - stopped syncing indefinitely and the booth showed as offline.
+ */
+bool sensorMayAct() {
+  return (currentlyInRange && !awaitClear) || (exitInRange && !exitAwaitClear);
 }
 
 /* ============================================================
  * Buffers
  * ========================================================== */
+
+void pushExit(uint32_t uptime, float cm) {
+  if (pendingExitCount == MAX_PENDING_EXITS) {
+    // Server unreachable for a long stretch: keep the newest exits.
+    for (size_t i = 1; i < MAX_PENDING_EXITS; i++) pendingExits[i - 1] = pendingExits[i];
+    pendingExitCount--;
+    droppedExits++;
+    Serial.println("!! Exit queue full - dropped the oldest unsent exit.");
+  }
+  pendingExits[pendingExitCount++] = { uptime, cm };
+}
 
 void pushDistance(float cm, bool inRange, uint32_t uptime) {
   if (distCount == DISTANCE_BUFFER) {
@@ -425,6 +543,10 @@ const char* stateName(SystemState s) {
     case DOOR_HOLD_OPEN:    return "DOOR_HOLD_OPEN";
     case DOOR_CLOSING:      return "DOOR_CLOSING";
     case ACCESS_DENIED:     return "ACCESS_DENIED";
+    // Local only - see the note on the enum.
+    case EXIT_OPENING:      return "EXIT_OPENING";
+    case EXIT_HOLD_OPEN:    return "EXIT_HOLD_OPEN";
+    case EXIT_CLOSING:      return "EXIT_CLOSING";
   }
   return "IDLE";
 }
@@ -479,6 +601,8 @@ String makeBootId() {
 
 /**
  * The compile-time constants, named exactly as booth_config's columns.
+ * (The exit sensor's pins are deliberately not included: booth_config has no
+ * columns for them.)
  */
 String buildConfigJson() {
   String c;
@@ -585,6 +709,17 @@ String buildPayload() {
     for (size_t i = 0; i < pendingCycleCount; i++) {
       if (i) p += ',';
       p += pendingCycles[i];
+    }
+    p += "]";
+  }
+
+  if (pendingExitCount) {
+    p += ",\"exits\":[";
+    for (size_t i = 0; i < pendingExitCount; i++) {
+      if (i) p += ',';
+      p += "{\"uptime_ms\":" + String(pendingExits[i].uptime);
+      p += ",\"distance_cm\":"; appendDistance(p, pendingExits[i].cm, 1);
+      p += "}";
     }
     p += "]";
   }
@@ -918,9 +1053,13 @@ bool resolveServer() {
 }
 
 bool syncDue(unsigned long now) {
-  if (now - lastSyncAttempt < MIN_SYNC_GAP) return false;
+  // Back off after failures: 3 s, 6 s, 12 s ... capped at MAX_SYNC_GAP.
+  unsigned long gap = MIN_SYNC_GAP;
+  for (uint8_t i = 0; i < syncFailStreak && gap < MAX_SYNC_GAP; i++) gap *= 2;
+  if (gap > MAX_SYNC_GAP) gap = MAX_SYNC_GAP;
+  if (now - lastSyncAttempt < gap) return false;
   if (lastSyncOk == 0) return true;   // never synced: register as soon as WiFi is up
-  if (pendingCycleCount > 0) return true;
+  if (pendingCycleCount > 0 || pendingExitCount > 0) return true;
   if (distCount >= DISTANCE_BUFFER / 2 || tempCount >= TEMP_BUFFER / 2) return true;
   return (now - lastSyncOk) >= HEARTBEAT_INTERVAL;
 }
@@ -957,6 +1096,7 @@ bool syncNow() {
     Serial.println(usingFixedServer()
       ? "!! Sync failed: could not build a URL for the server. Check SERVER_URL_VALUE in secrets.h."
       : "!! Sync failed: could not build a URL for the server. Check SERVER_PATH.");
+    if (syncFailStreak < 8) syncFailStreak++;
     return false;
   }
 
@@ -977,6 +1117,7 @@ bool syncNow() {
     Serial.print(") at ");
     Serial.print(usingFixedServer() ? String(SERVER_URL) : serverHost);
     Serial.println(". Queued for retry.");
+    if (syncFailStreak < 8) syncFailStreak++;
 
     // A negative code is a connection failure, not a rejection: the server did
     // not answer at all, so the address may have moved. A positive code came
@@ -987,6 +1128,7 @@ bool syncNow() {
   }
 
   connFailures = 0;
+  syncFailStreak = 0;
 
   Serial.print(">> Synced ");
   Serial.print(pendingCycleCount);
@@ -1005,6 +1147,7 @@ bool syncNow() {
 
   for (size_t i = 0; i < pendingCycleCount; i++) pendingCycles[i] = String();
   pendingCycleCount = 0;
+  pendingExitCount = 0;
   distHead = distCount = 0;
   tempHead = tempCount = 0;
   bootReported = true;
@@ -1078,7 +1221,25 @@ void finishCycle(unsigned long now, const char* outcome, const char* remarks) {
  * Setup / loop
  * ========================================================== */
 
+void printDistance(float cm) {
+  if (cm > 0) {
+    Serial.print(cm);
+    Serial.print(" cm");
+  } else {
+    Serial.print("out of range");
+  }
+}
+
 void setup() {
+  // The relay comes FIRST, before Serial, delay() and flash setup. Until this runs the pin
+  // is undriven, and an active-LOW relay board can read that as "on" - the pump ran for
+  // a moment every time the booth was plugged in. The level is written BEFORE the pin is
+  // switched to output, so it never pulses the wrong way. (The ~0.3 s the ESP32's own boot
+  // code takes before any sketch runs cannot be shortened in software: a 10k resistor
+  // from the relay's IN pin to 3.3V holds the board off during that window.)
+  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
+  pinMode(RELAY_PIN, OUTPUT);
+
   Serial.begin(115200);
   delay(200);
 
@@ -1089,14 +1250,18 @@ void setup() {
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  pinMode(RELAY_PIN, OUTPUT);
-  setRelay(false);
+  pinMode(TRIG_EXIT_PIN, OUTPUT);
+  pinMode(ECHO_EXIT_PIN, INPUT);
+  digitalWrite(TRIG_PIN, LOW);
+  digitalWrite(TRIG_EXIT_PIN, LOW);
+  setRelay(false);   // relay pin was already made an output, OFF, at the top of setup()
 
   Wire.begin(I2C_SDA, I2C_SCL);
   mlxOk = mlxTryBegin();
   if (!mlxOk) {
     Serial.println("WARNING: MLX90614 not detected. Screening cannot run, so every");
     Serial.println("         entry will be DENIED until it answers.");
+    Serial.println("         (Exiting from the inside still works.)");
     scanI2C();
     Serial.print("   Retrying every ");
     Serial.print(MLX_RETRY_INTERVAL / 1000);
@@ -1133,7 +1298,9 @@ void setup() {
   }
   Serial.print("Waiting for object within ");
   Serial.print(detectionDistanceCm, 0);
-  Serial.println("cm...");
+  Serial.print("cm (entry) / ");
+  Serial.print(EXIT_DETECTION_CM, 0);
+  Serial.println("cm (exit)...");
 }
 
 void loop() {
@@ -1142,31 +1309,40 @@ void loop() {
   wifiEnsure(now);
 
   // ---- Distance sampling ----
+  // One sensor per pass, alternating, so neither hears the other's ping.
   if (now - lastSampleTime >= SAMPLE_INTERVAL) {
     lastSampleTime = now;
-    lastDistance = readDistanceCM();
-    currentlyInRange = (lastDistance > 0 && lastDistance <= detectionDistanceCm);
+
+    if (pingExitNext) {
+      lastExitDistance = readDistanceCM(TRIG_EXIT_PIN, ECHO_EXIT_PIN);
+      exitInRange = (lastExitDistance > 0 && lastExitDistance <= EXIT_DETECTION_CM);
+    } else {
+      lastDistance = readDistanceCM(TRIG_PIN, ECHO_PIN);
+      currentlyInRange = (lastDistance > 0 && lastDistance <= detectionDistanceCm);
+    }
+    pingExitNext = !pingExitNext;
 
     if (now - lastPrintTime >= PRINT_INTERVAL) {
       lastPrintTime = now;
+      // Only the entry sensor is sent to the server; its distance log is the
+      // screening approach, and has no column for which sensor a reading came from.
       pushDistance(lastDistance, currentlyInRange, (uint32_t) now);
 
       Serial.print("[");
       Serial.print(now / 1000.0, 1);
-      Serial.print("s] Distance: ");
-      if (lastDistance > 0) {
-        Serial.print(lastDistance);
-        Serial.println(" cm");
-      } else {
-        Serial.println("out of range");
-      }
+      Serial.print("s] Entry: ");
+      printDistance(lastDistance);
+      Serial.print(" | Exit: ");
+      printDistance(lastExitDistance);
+      Serial.println();
     }
   }
 
   // ---- Sync ----
-  // Only while idle AND with nobody in range: a POST blocks for up to
-  // HTTP_TIMEOUT_MS, which must never land inside a spray burst or a door hold.
-  if (currentState == IDLE && !currentlyInRange && syncDue(now)) {
+  // Only while idle AND with nobody in range that a sensor would act on: a POST blocks
+  // for up to the HTTP(S) timeout, which must never land inside a spray burst or a door
+  // hold, nor keep someone waiting to get out. Failed syncs back off (see syncDue).
+  if (currentState == IDLE && !sensorMayAct() && syncDue(now)) {
     lastSyncAttempt = now;
     syncNow();
 
@@ -1210,17 +1386,37 @@ void loop() {
   switch (currentState) {
 
     case IDLE:
-      // Whoever just went through has to step out of range before the booth
-      // will start another cycle on them.
-      if (awaitClear) {
-        if (!currentlyInRange) {
-          awaitClear = false;
-          Serial.println(">> Clear. Ready for the next person.");
-        }
-        break;
+      // Whoever just went through has to step out of range of each sensor
+      // before that sensor will act on them again.
+      if (awaitClear && !currentlyInRange) {
+        awaitClear = false;
+        Serial.println(">> Entry side clear. Ready for the next person.");
+      }
+      if (exitAwaitClear && !exitInRange) {
+        exitAwaitClear = false;
+        Serial.println(">> Exit side clear.");
       }
 
-      if (currentlyInRange) {
+      // ---- Exit side: open the door, no screening, no spray ----
+      if (!exitAwaitClear && exitInRange) {
+        if (exitSeenSince == 0) exitSeenSince = now;
+        if (now - exitSeenSince >= EXIT_CONFIRM_TIME) {
+          exitSeenSince = 0;
+          exitForcedClose = false;
+          Serial.println(">> Person on the exit side. Opening door.");
+          pushExit((uint32_t) now, lastExitDistance);
+          doorServo.write(DOOR_OPEN_ANGLE);
+          stateStartTime = now;
+          setState(EXIT_OPENING, now);
+          break;
+        }
+      } else {
+        exitSeenSince = 0;
+      }
+
+      // ---- Entry side: screening and spray, as before ----
+      if (!awaitClear && currentlyInRange) {
+        exitSeenSince = 0;
         motionStartTime = now;
         lastOutOfRangeTime = 0;
         startCycle(now, lastDistance);
@@ -1338,14 +1534,14 @@ void loop() {
       break;
 
     case DOOR_HOLD_OPEN: {
-      // Never close on somebody still in the doorway. door_open_time_ms is
-      // settable from System Settings down to 500 ms, which on a fixed timer
-      // shut a servo-driven door on whoever was walking through it.
+      // Never close on somebody still in the doorway - on either side of it.
+      // door_open_time_ms is settable from System Settings down to 500 ms, which
+      // on a fixed timer shut a servo-driven door on whoever was walking through.
       bool minimumHeld = (now - stateStartTime) >= doorOpenTime;
       bool waitedLong  = (now - stateStartTime) >= (doorOpenTime + DOOR_CLEAR_GRACE);
 
-      if ((minimumHeld && !currentlyInRange) || waitedLong) {
-        doorForcedClose = waitedLong && currentlyInRange;
+      if ((minimumHeld && !anyoneAtDoor()) || waitedLong) {
+        doorForcedClose = waitedLong && anyoneAtDoor();
         Serial.println(doorForcedClose
                        ? "Closing door (still occupied after the grace period)."
                        : "Closing door.");
@@ -1361,12 +1557,55 @@ void loop() {
       if (now - stateStartTime >= 500) {
         Serial.println("Cycle complete. Returning to idle.\n");
         setState(IDLE, now);
+        // The person just walked through to the exit side. Without this the exit
+        // sensor would see them standing there and open the door straight back up.
+        exitAwaitClear = true;
         finishCycle(now, "granted",
                     doorForcedClose ? "Cleared for entry (door closed while still occupied)"
                                     : "Cleared for entry");
       }
       break;
+
+    /* ---- Exit sequence: door only ---- */
+
+    case EXIT_OPENING:
+      if (now - stateStartTime >= 500) {
+        stateStartTime = now;
+        setState(EXIT_HOLD_OPEN, now);
+      }
+      break;
+
+    case EXIT_HOLD_OPEN: {
+      // Same rule as the entry hold: a minimum, extended while anyone is at the
+      // door on either side, bounded so nothing can wedge it open for good.
+      bool minimumHeld = (now - stateStartTime) >= doorOpenTime;
+      bool waitedLong  = (now - stateStartTime) >= (doorOpenTime + DOOR_CLEAR_GRACE);
+
+      if ((minimumHeld && !anyoneAtDoor()) || waitedLong) {
+        exitForcedClose = waitedLong && anyoneAtDoor();
+        Serial.println(exitForcedClose
+                       ? "Closing door after exit (still occupied after the grace period)."
+                       : "Closing door after exit.");
+        doorServo.write(DOOR_CLOSED_ANGLE);
+        stateStartTime = now;
+        setState(EXIT_CLOSING, now);
+      }
+      break;
+    }
+
+    case EXIT_CLOSING:
+      if (now - stateStartTime >= 500) {
+        exitCount++;
+        Serial.print("Exit complete (");
+        Serial.print(exitCount);
+        Serial.println(" since boot). Returning to idle.\n");
+        setState(IDLE, now);
+        // The person who left is now on the entry side. They must step away
+        // before the entry sensor will start a screening (and spray) on them,
+        // and the exit sensor must read clear before it reopens the door.
+        awaitClear = true;
+        exitAwaitClear = true;
+      }
+      break;
   }
 }
-
-

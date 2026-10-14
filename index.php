@@ -167,6 +167,30 @@ require __DIR__ . '/includes/header.php';
   </div>
 </div>
 
+<!-- ===================== Recent exits ===================== -->
+<div class="card mt-3">
+  <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <span><i class="bi bi-box-arrow-right me-2"></i>Recent Exits</span>
+    <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">
+      <span id="exitsToday">0</span> today
+    </span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Exit ID</th>
+          <th>Exit Date</th>
+          <th>Exit Time</th>
+        </tr>
+      </thead>
+      <tbody id="exitsBody">
+        <tr><td colspan="3" class="text-center text-muted py-4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <!-- Entry detail modal -->
 <div class="modal fade" id="entryModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">

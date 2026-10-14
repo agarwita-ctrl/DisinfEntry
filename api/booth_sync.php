@@ -16,6 +16,7 @@
  *     "boot":        {"mlx_ok":true,"message":"..."},   // until the first sync lands
  *     "config":      { ...the sketch's compile-time constants... },
  *     "cycles":      [ ...whole detection-to-reset passes... ],
+ *     "exits":       [ {"uptime_ms":123000,"distance_cm":31.5} ],  // exit-side door openings
  *     "distance":    [ {"distance_cm":41.2,"in_range":true,"uptime_ms":...} ],
  *     "temperature": [ {"object_temp_c":36.6,"ambient_temp_c":29.1,"is_screening":false,...} ]
  *   }
@@ -24,6 +25,7 @@
  * POST updates rows instead of duplicating them:
  *   - cycles  by cycle_ref ("<boot_id>:<detected_uptime_ms>")
  *   - samples by (boot_id, uptime_ms)
+ *   - exits   by "<boot_id>:<uptime_ms>"
  *
  * The booth times everything in uptime_ms, which means nothing to a reader.
  * Each one is converted to wall clock against the uptime_ms of the sync that
@@ -519,6 +521,50 @@ foreach ($cycles as $c) {
     }
 }
 
+/* ============================================================
+ * Exits
+ *
+ * Someone leaving trips the booth's second sensor, which opens the door with
+ * no screening and no spray - so an exit is not a cycle and not an entry. It
+ * gets its own small table, keyed by exit_ref so a resent batch updates the
+ * row instead of logging the same person twice.
+ * ========================================================== */
+
+$exitsStored = 0;
+$exits = is_array($in['exits'] ?? null) ? array_slice($in['exits'], 0, 100) : [];
+
+if ($exits) {
+    $upsertExit = $pdo->prepare(
+        'INSERT INTO booth_exits
+           (device_id, boot_id, exit_ref, detected_uptime_ms, distance_cm, exited_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE distance_cm = VALUES(distance_cm), exited_at = VALUES(exited_at)'
+    );
+
+    foreach ($exits as $x) {
+        if (!is_array($x)) {
+            continue;
+        }
+        $uptime = $int($x, 'uptime_ms');
+        if ($uptime === null) {
+            continue;
+        }
+        $uptime = max(0, $uptime);
+        $dist   = $num($x, 'distance_cm');
+        if ($dist !== null && ($dist < 0 || $dist > 9999.9)) {
+            $dist = null;
+        }
+
+        $upsertExit->execute([
+            $deviceId, $bootId, $bootId . ':' . $uptime, $uptime, $dist, $wallClock($uptime),
+        ]);
+        // 1 = inserted, 2 = an existing row was updated (a resend), 0 = unchanged.
+        if ($upsertExit->rowCount() === 1) {
+            $exitsStored++;
+        }
+    }
+}
+
 // GREATEST(...) because a batch can arrive out of order after a long outage,
 // and a late-delivered old cycle must not rewind the newest one on record.
 if ($lastCycleAt !== null) {
@@ -668,6 +714,7 @@ json_response([
     'stored'      => [
         'cycles'      => $cyclesStored,
         'entries'     => $entriesCreated,
+        'exits'       => $exitsStored,
         'distance'    => $distanceStored,
         'temperature' => $tempStored,
         'config'      => $configReported,

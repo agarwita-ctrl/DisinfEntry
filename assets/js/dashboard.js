@@ -292,6 +292,34 @@
     primed = true;
   }
 
+  /* ---------------- Recent exits ---------------- */
+
+  let lastExitId = 0;
+  let exitsPrimed = false;
+
+  function renderExits(data) {
+    const body = document.getElementById('exitsBody');
+    const rows = (data && data.rows) || [];
+    document.getElementById('exitsToday').textContent = (data && data.today) || 0;
+
+    if (!rows.length) {
+      body.innerHTML =
+        '<tr><td colspan="3"><div class="empty-state"><i class="bi bi-inbox"></i>No exits recorded yet.<br>' +
+        '<span class="small">Exits through the exit sensor will appear here.</span></div></td></tr>';
+      return;
+    }
+
+    body.innerHTML = rows.map((r) => `
+      <tr class="${exitsPrimed && r.id > lastExitId ? 'feed-row' : ''}">
+        <td class="fw-semibold">${App.esc(r.exit_id)}</td>
+        <td>${App.esc(r.date)}</td>
+        <td>${App.esc(r.time)}</td>
+      </tr>`).join('');
+
+    lastExitId = Math.max(lastExitId, ...rows.map((r) => r.id));
+    exitsPrimed = true;
+  }
+
   document.addEventListener('click', (ev) => {
     const btn = ev.target.closest('.view-entry');
     if (!btn) return;
@@ -329,6 +357,7 @@
       drawTemp();
       drawMonthly();
       renderRecent(d.recent);
+      renderExits(d.exits);
     } catch (err) {
       App.toast(err.message, 'danger');
     }
@@ -341,6 +370,8 @@
       renderStats(d.stats);
       const r = await App.api('api/dashboard.php', { params: { action: 'recent', limit: 10 } });
       renderRecent(r.recent);
+      const x = await App.api('api/dashboard.php', { params: { action: 'exits', limit: 10 } });
+      renderExits(x.exits);
       document.getElementById('liveIndicator').className =
         'badge bg-success-subtle text-success border border-success-subtle';
     } catch {

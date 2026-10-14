@@ -5,9 +5,9 @@
 --  Import this into that database. It has no CREATE DATABASE / USE statements on
 --  purpose: hosted databases come with their own name.
 --
---  Schema = database/disinfentry.sql with migrations 001-003 already applied,
---  tables created in foreign-key order. Seed = default settings, three default
---  accounts (admin / manager / jdelacruz) and one booth.
+--  Schema = database/disinfentry.sql with migrations 001-004 already applied,
+--  tables created in foreign-key order. Seed = default settings, two default
+--  accounts (admin / manager) and one booth.
 --
 --  After the first sign-in: change the default passwords (the app forces this) and
 --  regenerate the booth API key in System Settings - the key seeded below is the
@@ -17,6 +17,7 @@ SET NAMES utf8mb4;
 
 -- Drop in reverse dependency order, create in dependency order.
 DROP TABLE IF EXISTS `booth_pump_bursts`;
+DROP TABLE IF EXISTS `booth_exits`;
 DROP TABLE IF EXISTS `booth_door_actions`;
 DROP TABLE IF EXISTS `booth_cycle_states`;
 DROP TABLE IF EXISTS `booth_cycles`;
@@ -291,6 +292,24 @@ CREATE TABLE `booth_door_actions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------
+-- booth_exits
+-- ----------------------------------------------------
+CREATE TABLE `booth_exits` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `device_id` varchar(60) NOT NULL,
+  `boot_id` varchar(36) NOT NULL,
+  `exit_ref` varchar(80) NOT NULL,
+  `detected_uptime_ms` bigint(20) unsigned NOT NULL,
+  `distance_cm` decimal(6,1) DEFAULT NULL,
+  `exited_at` datetime NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_exit_ref` (`exit_ref`),
+  KEY `idx_exit_time` (`exited_at`),
+  KEY `idx_exit_device` (`device_id`,`exited_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------
 -- booth_pump_bursts
 -- ----------------------------------------------------
 CREATE TABLE `booth_pump_bursts` (
@@ -336,8 +355,6 @@ INSERT INTO `users`
   ('EMP-0001','System Administrator','09171234567','admin',
    '$2y$12$y41UboqQkf3n0iXDeGbLMeu5ln4okjypRo0ITH6UjyDalV3BzRjva','administrator','active'),
   ('EMP-0002','Farm Manager','09179876543','manager',
-   '$2y$12$sMjKUZyUz7HJEDUCvWiO5.HJBCTxHGHSWYf0Od.8k50F/eWv4Vkza','farm_manager','active'),
-  ('EMP-0003','Juan Dela Cruz','09181112222','jdelacruz',
    '$2y$12$sMjKUZyUz7HJEDUCvWiO5.HJBCTxHGHSWYf0Od.8k50F/eWv4Vkza','farm_manager','active');
 
 -- Registered but never heard from: no last_seen, and no disinfectant level,

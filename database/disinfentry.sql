@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS `audit_logs`;
 DROP TABLE IF EXISTS `notifications`;
 DROP TABLE IF EXISTS `booth_cycle_states`;
 DROP TABLE IF EXISTS `booth_pump_bursts`;
+DROP TABLE IF EXISTS `booth_exits`;
 DROP TABLE IF EXISTS `booth_door_actions`;
 DROP TABLE IF EXISTS `booth_cycles`;
 DROP TABLE IF EXISTS `booth_distance_samples`;
@@ -224,6 +225,21 @@ CREATE TABLE `booth_door_actions` (
   CONSTRAINT `fk_door_cycle` FOREIGN KEY (`cycle_id`) REFERENCES `booth_cycles`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `booth_exits` (
+  `id`                 INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id`          VARCHAR(60)  NOT NULL,
+  `boot_id`            VARCHAR(36)  NOT NULL,
+  `exit_ref`           VARCHAR(80)  NOT NULL,
+  `detected_uptime_ms` BIGINT UNSIGNED NOT NULL,
+  `distance_cm`        DECIMAL(6,1) DEFAULT NULL,
+  `exited_at`          DATETIME     NOT NULL,
+  `created_at`         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_exit_ref` (`exit_ref`),
+  KEY `idx_exit_time` (`exited_at`),
+  KEY `idx_exit_device` (`device_id`,`exited_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ------------------------------------------------------------
 -- Raw sensor streams
 --
@@ -347,8 +363,6 @@ INSERT INTO `users`
   ('EMP-0001','System Administrator','09171234567','admin',
    '$2y$12$y41UboqQkf3n0iXDeGbLMeu5ln4okjypRo0ITH6UjyDalV3BzRjva','administrator','active'),
   ('EMP-0002','Farm Manager','09179876543','manager',
-   '$2y$12$sMjKUZyUz7HJEDUCvWiO5.HJBCTxHGHSWYf0Od.8k50F/eWv4Vkza','farm_manager','active'),
-  ('EMP-0003','Juan Dela Cruz','09181112222','jdelacruz',
    '$2y$12$sMjKUZyUz7HJEDUCvWiO5.HJBCTxHGHSWYf0Od.8k50F/eWv4Vkza','farm_manager','active');
 
 -- Registered but never heard from: no last_seen, and no disinfectant level,
