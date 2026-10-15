@@ -47,6 +47,7 @@ if ($valid && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->prepare('UPDATE password_resets SET used_at = NOW() WHERE id = ?')
             ->execute([(int) $row['id']]);
         $pdo->commit();
+        mark_password_changed((int) $row['user_id']);
 
         audit('Password reset completed', 'Authentication', (int) $row['user_id'], $row['username']);
         $_SESSION['flash'] = 'Your password has been reset. You can now sign in.';
@@ -63,8 +64,8 @@ $sysName = setting('system_name', 'DisinfEntry');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reset Password · <?= e($sysName) ?></title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" integrity="sha384-XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+" crossorigin="anonymous">
 <link href="<?= url('assets/css/style.css') ?>" rel="stylesheet">
 </head>
 <body>

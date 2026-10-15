@@ -15,6 +15,9 @@ const SESSION_IDLE_TIMEOUT = 1800; // 30 minutes
  */
 const DEFAULT_PASSWORDS = ['Admin@123', 'Manager@123'];
 
+/** Longest password accepted. bcrypt only reads the first 72 bytes, so more is silently ignored. */
+const PASSWORD_MAX_BYTES = 72;
+
 /* ============================================================
  * Session state
  * ========================================================== */
@@ -53,8 +56,69 @@ function login_user(array $user): void
         'role'        => $user['role'],
     ];
     $_SESSION['last_activity'] = time();
+    $_SESSION['login_at']      = time();
 
     db()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?')->execute([(int) $user['id']]);
+}
+
+/**
+ * The signed-in account as the database has it right now.
+ *
+ * Falls back to a query without password_changed_at when migration 005 has not been
+ * applied yet, so an older database keeps working (it just cannot end other sessions
+ * after a password change).
+ */
+function load_account(int $id): ?array
+{
+    try {
+        $stmt = db()->prepare('SELECT status, role, full_name, password_changed_at FROM users WHERE id = ?');
+        $stmt->execute([$id]);
+    } catch (PDOException $e) {
+        $stmt = db()->prepare('SELECT status, role, full_name, NULL AS password_changed_at FROM users WHERE id = ?');
+        $stmt->execute([$id]);
+    }
+    return $stmt->fetch() ?: null;
+}
+
+/**
+ * Re-checks the session against the database on every request. Returns the reason the
+ * session must end, or null - in which case the role and name are refreshed, so a demoted
+ * administrator loses admin rights on their next request, not at their next login.
+ */
+function session_problem(): ?string
+{
+    $acct = load_account((int) $_SESSION['user']['id']);
+
+    if (!$acct || $acct['status'] !== 'active') {
+        return 'Your account is no longer active. Contact the administrator.';
+    }
+    // A password change ends every session that started before it.
+    if ($acct['password_changed_at'] !== null
+        && strtotime((string) $acct['password_changed_at']) > (int) ($_SESSION['login_at'] ?? 0)) {
+        return 'Your password was changed. Please sign in again.';
+    }
+
+    $_SESSION['user']['role']      = $acct['role'];
+    $_SESSION['user']['full_name'] = $acct['full_name'];
+    return null;
+}
+
+/**
+ * Records a password change and keeps only the current session alive.
+ * Call after the new hash is written.
+ */
+function mark_password_changed(int $userId): void
+{
+    try {
+        db()->prepare('UPDATE users SET password_changed_at = ? WHERE id = ?')
+            ->execute([date('Y-m-d H:i:s'), $userId]);
+    } catch (PDOException $e) {
+        return;   // migration 005 not applied
+    }
+    if (is_logged_in() && (int) $_SESSION['user']['id'] === $userId) {
+        session_regenerate_id(true);
+        $_SESSION['login_at'] = time();
+    }
 }
 
 /** True while the signed-in user still has to replace a shipped default password. */
@@ -95,14 +159,10 @@ function require_login(): void
     }
     $_SESSION['last_activity'] = time();
 
-    // A deactivated or deleted account loses access immediately.
-    $stmt = db()->prepare('SELECT status FROM users WHERE id = ?');
-    $stmt->execute([(int) $_SESSION['user']['id']]);
-    $status = $stmt->fetchColumn();
-
-    if ($status !== 'active') {
+    // A deactivated, deleted or password-changed account loses access immediately.
+    if ($problem = session_problem()) {
         logout_user();
-        redirect_to_login('Your account is no longer active. Contact the administrator.');
+        redirect_to_login($problem);
     }
 
     // Hold anyone still on a shipped default password at My Profile until they
@@ -142,11 +202,22 @@ function api_require_login(): void
 
     // Same rule as require_login(): a deactivated or deleted account loses API
     // access immediately, not when it next loads a page.
-    $stmt = db()->prepare('SELECT status FROM users WHERE id = ?');
-    $stmt->execute([(int) $_SESSION['user']['id']]);
-    if ($stmt->fetchColumn() !== 'active') {
+    if ($problem = session_problem()) {
         logout_user();
-        json_response(['success' => false, 'message' => 'Account is no longer active.', 'logged_out' => true], 401);
+        json_response(['success' => false, 'message' => $problem, 'logged_out' => true], 401);
+    }
+
+    // Anyone still on a shipped default password is held to the profile page - and that
+    // has to cover the API too, or the default admin account can regenerate the booth key
+    // or purge the audit log without ever changing it. Only the read-only status polls the
+    // page header makes are let through, so My Profile itself stays quiet.
+    if (must_change_password()
+        && !(($_SERVER['REQUEST_METHOD'] ?? '') === 'GET'
+             && in_array(basename($_SERVER['SCRIPT_NAME'] ?? ''), ['notifications.php', 'device_status.php'], true))) {
+        json_response([
+            'success' => false,
+            'message' => 'Change your default password first (My Profile).',
+        ], 403);
     }
 }
 
@@ -202,6 +273,10 @@ const LOGIN_WINDOW_MINUTES  = 15;
 function login_buckets(string $username): array
 {
     $ip = client_ip();
+
+    // audit() stores the username cut to 60 characters. Compare the same cut value, or a
+    // longer submitted name never matches its own rows and escapes the per-user buckets.
+    $username = mb_substr($username, 0, 60);
 
     return [
         ['username = ? AND ip_address = ?', [$username, $ip], LOGIN_MAX_PER_USER_IP],
@@ -265,6 +340,9 @@ function password_policy_error(string $password): ?string
 {
     if (strlen($password) < 8) {
         return 'Password must be at least 8 characters long.';
+    }
+    if (strlen($password) > PASSWORD_MAX_BYTES) {
+        return 'Password must be at most ' . PASSWORD_MAX_BYTES . ' characters long.';
     }
     if (!preg_match('/[A-Za-z]/', $password) || !preg_match('/\d/', $password)) {
         return 'Password must contain at least one letter and one number.';

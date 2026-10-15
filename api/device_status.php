@@ -21,9 +21,8 @@ if ($action === 'heartbeat') {
 
     // Header only: a key in the query string ends up in access logs and browser history.
     $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
-    $expectedKey = setting('api_key', '');
 
-    if ($expectedKey === '' || !hash_equals($expectedKey, (string) $providedKey)) {
+    if (!device_key_valid((string) $providedKey)) {
         json_response(['success' => false, 'message' => 'Invalid API key.'], 401);
     }
 
@@ -92,7 +91,8 @@ foreach ($devices as $d) {
           WHERE type = "device_offline" AND message LIKE ?
             AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
     );
-    $stmt->execute(['%(' . $d['device_id'] . ')%']);
+    // The id is matched literally: % and _ in it must not act as wildcards.
+    $stmt->execute(['%(' . addcslashes($d['device_id'], '%_\\') . ')%']);
     if ((int) $stmt->fetchColumn() === 0) {
         notify(
             'device_offline',

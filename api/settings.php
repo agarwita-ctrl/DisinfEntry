@@ -65,8 +65,8 @@ if ($farmName === '' || $sysName === '') {
 if (!in_array($timezone, DateTimeZone::listIdentifiers(), true)) {
     json_response(['success' => false, 'message' => 'Please select a valid timezone.'], 422);
 }
-if (!is_numeric($threshold) || (float) $threshold < 30.0 || (float) $threshold > 45.0) {
-    json_response(['success' => false, 'message' => 'Temperature threshold must be between 30.0 and 45.0 °C.'], 422);
+if (!is_numeric($threshold) || (float) $threshold < 35.0 || (float) $threshold > 40.0) {
+    json_response(['success' => false, 'message' => 'Temperature threshold must be between 35.0 and 40.0 °C.'], 422);
 }
 if ($duration < 1 || $duration > 120) {
     json_response(['success' => false, 'message' => 'Disinfection duration must be between 1 and 120 seconds.'], 422);
@@ -151,7 +151,9 @@ if (!empty($_FILES['logo']['name']) && ($_FILES['logo']['error'] ?? UPLOAD_ERR_N
         json_response(['success' => false, 'message' => 'Could not create the uploads directory.'], 500);
     }
 
-    $name = 'logo_' . date('YmdHis') . '.' . $allowed[$info[2]];
+    // Random, not a timestamp: two saves in the same second would otherwise share a name,
+    // and the cleanup below would delete the file just written.
+    $name = 'logo_' . date('YmdHis') . '_' . bin2hex(random_bytes(4)) . '.' . $allowed[$info[2]];
     if (!move_uploaded_file($file['tmp_name'], $dir . '/' . $name)) {
         json_response(['success' => false, 'message' => 'Could not save the uploaded logo.'], 500);
     }

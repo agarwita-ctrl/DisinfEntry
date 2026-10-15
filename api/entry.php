@@ -41,9 +41,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 /* ---- Device authentication ---- */
 // Header only: a key in the query string ends up in access logs and browser history.
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
-$expectedKey = setting('api_key', '');
 
-if ($expectedKey === '' || !hash_equals($expectedKey, (string) $providedKey)) {
+if (!device_key_valid((string) $providedKey)) {
     json_response(['success' => false, 'message' => 'Invalid API key.'], 401);
 }
 

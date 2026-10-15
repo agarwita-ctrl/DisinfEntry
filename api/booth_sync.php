@@ -58,10 +58,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 /* ---- Device authentication ---- */
 // Header only: a key in the query string ends up in access logs and browser history.
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
-$expectedKey = setting('api_key', '');
 
-if ($expectedKey === '' || !hash_equals($expectedKey, (string) $providedKey)) {
-    json_response(['success' => false, 'message' => 'Invalid API key.'], 401);
+if (!device_key_valid((string) $providedKey)) {
+    json_response(['success' => false, 'message' => 'Invalid API key. (The shipped default key is refused over the internet - regenerate it in System Settings > Booth API Access.)'], 401);
 }
 
 $in = json_input();
@@ -84,8 +83,8 @@ if (!isset($in['uptime_ms']) || !is_numeric($in['uptime_ms'])) {
 }
 
 $deviceName  = mb_substr(trim((string) ($in['device_name'] ?? 'Disinfection Booth')), 0, 120);
-$firmware    = isset($in['firmware']) ? substr((string) $in['firmware'], 0, 30) : null;
-$boothState  = substr((string) ($in['state'] ?? 'IDLE'), 0, 24);
+$firmware    = isset($in['firmware']) ? mb_substr((string) $in['firmware'], 0, 30) : null;
+$boothState  = mb_substr((string) ($in['state'] ?? 'IDLE'), 0, 24);
 $syncUptime  = max(0, (int) $in['uptime_ms']);
 $receivedAt  = microtime(true);
 
@@ -110,7 +109,16 @@ $wallClock = static function (?int $uptimeMs) use ($syncUptime, $receivedAt): st
 
 /** Reads a value that the firmware sends as a number or as JSON null. */
 $num = static function (array $src, string $key): ?float {
-    return isset($src[$key]) && is_numeric($src[$key]) ? (float) $src[$key] : null;
+    // INF and NaN are numeric to PHP but not to a DECIMAL column: one would fail the whole
+    // batch, and the booth would resend that same batch forever.
+    return isset($src[$key]) && is_numeric($src[$key]) && is_finite((float) $src[$key])
+        ? (float) $src[$key] : null;
+};
+
+/** A number forced into [min, max], or null when absent / not finite. */
+$numIn = static function (array $src, string $key, float $min, float $max) use ($num): ?float {
+    $v = $num($src, $key);
+    return $v === null ? null : max($min, min($max, $v));
 };
 
 $int = static function (array $src, string $key): ?int {
@@ -231,9 +239,19 @@ if (is_array($in['config'] ?? null)) {
     $configReported = true;
     $cfg = $in['config'];
 
+    // Bounds per column type, so an out-of-range value is clamped instead of being rejected
+    // by the database (which would fail the whole sync).
+    $pinCols     = ['trig_pin', 'echo_pin', 'relay_pin', 'servo_pin', 'i2c_sda_pin', 'i2c_scl_pin',
+                    'door_closed_angle', 'door_open_angle'];
     $values = [$deviceId];
     foreach ($configColumns as $col) {
-        $values[] = $num($cfg, $col);
+        $values[] = match (true) {
+            in_array($col, $pinCols, true)   => $numIn($cfg, $col, -32768, 32767),
+            $col === 'relay_active_low'      => $numIn($cfg, $col, 0, 1),
+            $col === 'fever_threshold_c'     => $numIn($cfg, $col, -999.99, 999.99),
+            $col === 'detection_distance_cm' => $numIn($cfg, $col, 0, 99999.9),
+            default                          => $numIn($cfg, $col, 0, 4294967295),
+        };
     }
 
     $assignments = implode(', ', array_map(
@@ -308,7 +326,8 @@ $clearStates = $pdo->prepare('DELETE FROM booth_cycle_states WHERE cycle_id = ?'
 $clearBursts = $pdo->prepare('DELETE FROM booth_pump_bursts WHERE cycle_id = ?');
 $clearDoor   = $pdo->prepare('DELETE FROM booth_door_actions WHERE cycle_id = ?');
 
-$cycles = is_array($in['cycles'] ?? null) ? $in['cycles'] : [];
+// A booth queues at most a handful; a bigger batch would hold the transaction open for long.
+$cycles = is_array($in['cycles'] ?? null) ? array_slice($in['cycles'], 0, 100) : [];
 
 foreach ($cycles as $c) {
     if (!is_array($c)) {
@@ -326,19 +345,23 @@ foreach ($cycles as $c) {
         $outcome = 'in_progress';
     }
 
-    $screeningTemp = $num($c, 'screening_temp_c');
-    $ambientTemp   = $num($c, 'ambient_temp_c');
-    $triggerDist   = $num($c, 'trigger_distance_cm');
-    $cycleThresh   = $num($c, 'threshold_c');
+    // Clamped to the column's range: a value the database rejects would fail the whole
+    // batch, and the booth would resend that same batch forever.
+    $screeningTemp = $numIn($c, 'screening_temp_c', -999.99, 999.99);
+    $ambientTemp   = $numIn($c, 'ambient_temp_c', -999.99, 999.99);
+    $triggerDist   = $numIn($c, 'trigger_distance_cm', 0, 99999.9);
+    $cycleThresh   = $numIn($c, 'threshold_c', -999.99, 999.99);
     $pumpBursts    = max(0, min(255, $int($c, 'pump_bursts') ?? 0));
-    $pumpTotalMs   = max(0, $int($c, 'pump_total_ms') ?? 0);
+    $pumpTotalMs   = max(0, min(4294967295, $int($c, 'pump_total_ms') ?? 0));
     $doorOpened    = !empty($c['door_opened']) ? 1 : 0;
     $remarks       = mb_substr(trim((string) ($c['remarks'] ?? '')), 0, 255);
     $detectedAt    = $wallClock($detectedUptime);
 
     // A reading outside what an MLX90614 can plausibly report is treated as no
     // reading at all rather than persisted as a measurement.
+    $implausibleTemp = null;
     if ($screeningTemp !== null && ($screeningTemp < 20.0 || $screeningTemp > 50.0)) {
+        $implausibleTemp = $screeningTemp;
         $screeningTemp = null;
     }
 
@@ -346,7 +369,7 @@ foreach ($cycles as $c) {
     $existing = $findCycle->fetch() ?: null;
 
     $cycleRow = [
-        $int($c, 'duration_ms'),
+        ($durMs = $int($c, 'duration_ms')) === null ? null : max(0, min(86400000, $durMs)),
         $triggerDist,
         $screeningTemp,
         $ambientTemp,
@@ -398,8 +421,8 @@ foreach ($cycles as $c) {
         $insertState->execute([
             $cycleId,
             $seq++,
-            substr((string) ($s['from_state'] ?? ''), 0, 24),
-            substr((string) ($s['to_state'] ?? ''), 0, 24),
+            mb_substr((string) ($s['from_state'] ?? ''), 0, 24),
+            mb_substr((string) ($s['to_state'] ?? ''), 0, 24),
             max(0, $int($s, 'uptime_ms') ?? 0),
         ]);
     }
@@ -438,7 +461,19 @@ foreach ($cycles as $c) {
             $pendingNotices[] = [
                 'system',
                 'Screening Failed',
-                sprintf('Booth %s denied entry because the temperature could not be read. Check the MLX90614.', $deviceId),
+                $implausibleTemp !== null
+                    ? sprintf('Booth %s denied entry: the thermometer reported %.1f°C, which is not a body temperature. Check the MLX90614.', $deviceId, $implausibleTemp)
+                    : sprintf('Booth %s denied entry because the temperature could not be read. Check the MLX90614.', $deviceId),
+                'danger',
+                null,
+            ];
+        } elseif ($isNew && $outcome === 'granted' && $implausibleTemp !== null) {
+            // Granted, but with nothing believable to record: it is not published as an entry
+            // (entries.temperature feeds every report), so say so instead of dropping it silently.
+            $pendingNotices[] = [
+                'system',
+                'Implausible Temperature Reading',
+                sprintf('Booth %s granted entry on a reading of %.1f°C, which is not a body temperature, so no entry was recorded. Check the MLX90614.', $deviceId, $implausibleTemp),
                 'danger',
                 null,
             ];

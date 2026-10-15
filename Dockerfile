@@ -28,4 +28,4 @@ ENV PHP_CLI_SERVER_WORKERS=8
 # Railway injects PORT (8080 if it is somehow unset). Errors go to the log, not the page:
 # with no error_log set, the CLI server writes them to stderr, which Railway collects. (An
 # explicit error_log=/dev/stderr can fail with "permission denied" for a non-root user.)
-CMD ["sh", "-c", "exec php -d display_errors=0 -d log_errors=1 -S 0.0.0.0:${PORT:-8080} -t /app /app/docker/router.php"]
+CMD ["sh", "-c", "exec php -d display_errors=0 -d expose_php=0 -d log_errors=1 -S 0.0.0.0:${PORT:-8080} -t /app /app/docker/router.php"]

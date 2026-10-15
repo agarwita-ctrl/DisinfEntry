@@ -178,12 +178,24 @@ const unsigned long PRESENCE_GLITCH_GRACE = 500;
 // door open for good, so the wait is bounded.
 const unsigned long DOOR_CLEAR_GRACE = 30000;
 
+// The exit door is held open for someone leaving with nothing screening the entry side, so
+// its extension is kept much shorter than the entry door's.
+const unsigned long EXIT_CLEAR_GRACE = 8000;
+
+// Longest the booth stays in ACCESS_DENIED waiting for the person to step away.
+const unsigned long ACCESS_DENIED_MAX_MS = 15000;
+
 // The two sensors are pinged alternately, never together, so one cannot hear the
 // other's echo. Each sensor therefore gets a fresh reading every 2 x this
 // (100 ms) - the same rate the single entry sensor had before.
 const unsigned long SAMPLE_INTERVAL       = 50;
 const unsigned long PRINT_INTERVAL        = 1000;  // how often to print/record distance (slowed down)
 const unsigned long TEMP_PRINT_INTERVAL   = 2000;  // how often to print/record temperature
+
+// A forehead/skin reading outside this is not a measurement of a person. Screening fails
+// closed on it, the same as on a NaN. (The server's own plausibility window is 20-50 C.)
+const float SCREEN_MIN_PLAUSIBLE_C = 20.0;
+const float SCREEN_MAX_PLAUSIBLE_C = 50.0;
 
 // How often to re-attempt the thermometer while it is missing. begin() used to
 // run once in setup(), so a loose I2C wire left the booth denying everyone
@@ -685,7 +697,7 @@ String buildCycleJson(uint32_t endedUptime) {
 
 String buildPayload() {
   String p;
-  p.reserve(4096);
+  p.reserve(14336);   // a full queue is ~13 KB; reserve it once so it cannot grow (and fragment) mid-handshake
 
   p += "{\"device_id\":\"" + String(DEVICE_ID) + "\"";
   p += ",\"device_name\":\"" + String(DEVICE_NAME) + "\"";
@@ -811,14 +823,16 @@ bool adoptMillis(const String& body, const char* key, unsigned long& target, flo
 void adoptDirectives(const String& body) {
   bool changed = false;
 
-  // The fever threshold is the safety-critical one: nothing outside a
-  // plausible human range is accepted, whatever the server says.
-  changed |= adoptFloat(body, "fever_threshold_c", feverThresholdC, 30.0, 45.0);
+  // The fever threshold is the safety-critical one: nothing outside a narrow clinical
+  // range is accepted, whatever the server says - a spoofed or tampered reply must not be
+  // able to switch fever screening off (45 C) or hold the pump on for a minute.
+  // These ranges mirror BOOTH_DIRECTIVE_RANGES in includes/functions.php; change both.
+  changed |= adoptFloat(body, "fever_threshold_c", feverThresholdC, 35.0, 40.0);
   changed |= adoptFloat(body, "detection_distance_cm", detectionDistanceCm, 2.0, 400.0);
-  changed |= adoptMillis(body, "presence_confirm_time_ms", presenceConfirmTime, 1000, 60000);
-  changed |= adoptMillis(body, "pump_on_time_ms", pumpOnTime, 200, 60000);
-  changed |= adoptMillis(body, "pump_off_time_ms", pumpOffTime, 0, 60000);
-  changed |= adoptMillis(body, "door_open_time_ms", doorOpenTime, 500, 120000);
+  changed |= adoptMillis(body, "presence_confirm_time_ms", presenceConfirmTime, 1000, 30000);
+  changed |= adoptMillis(body, "pump_on_time_ms", pumpOnTime, 200, 10000);
+  changed |= adoptMillis(body, "pump_off_time_ms", pumpOffTime, 0, 10000);
+  changed |= adoptMillis(body, "door_open_time_ms", doorOpenTime, 500, 60000);
 
   if (changed) {
     configDirty = true;   // report the values now in force on the next sync
@@ -1457,13 +1471,20 @@ void loop() {
           // NaN is false - so testing only for "too high" would wave everyone
           // through the moment the sensor died. A booth that cannot screen must
           // not grant entry.
-          if (isnan(objTemp) || isinf(objTemp)) {
+          // A thermometer that died after boot, or one that answers an I2C error with a finite
+          // number (-273.15 C from a zero raw value, say), must not read as "cool, come in":
+          // anything outside a believable skin/forehead range is a failed read, too.
+          if (isnan(objTemp) || isinf(objTemp) || !mlxOk
+              || objTemp < SCREEN_MIN_PLAUSIBLE_C || objTemp > SCREEN_MAX_PLAUSIBLE_C) {
             screeningFailed = true;
+            if (!isnan(objTemp) && !isinf(objTemp)) mlxOk = false;   // let the retry loop re-probe it
             Serial.println(">> ACCESS DENIED: Temperature reading failed. Check the MLX90614.");
+            stateStartTime = now;
             setState(ACCESS_DENIED, now);
           } else if (objTemp >= feverThresholdC) {
             screeningFailed = false;
             Serial.println(">> ACCESS DENIED: Temperature too high. Pump and door blocked.");
+            stateStartTime = now;
             setState(ACCESS_DENIED, now);
           } else {
             screeningFailed = false;
@@ -1478,8 +1499,14 @@ void loop() {
       break;
 
     case ACCESS_DENIED:
-      if (!currentlyInRange) {
-        Serial.println(">> Person left. Resetting system.");
+      // Back to IDLE when the person leaves - or after a time limit. Exits and syncing only
+      // run in IDLE, so without the limit someone (or something) left standing in front of
+      // the entry sensor would stop people inside from getting out and show the booth as
+      // offline for as long as they stayed. awaitClear keeps the sensor from re-screening
+      // them until it has read clear once.
+      if (!currentlyInRange || (now - stateStartTime) >= ACCESS_DENIED_MAX_MS) {
+        Serial.println(currentlyInRange ? ">> Denied person still in range. Releasing the booth."
+                                        : ">> Person left. Resetting system.");
         setState(IDLE, now);
         finishCycle(now, "denied",
                     screeningFailed ? "Temperature reading failed (MLX90614 fault)"
@@ -1579,7 +1606,7 @@ void loop() {
       // Same rule as the entry hold: a minimum, extended while anyone is at the
       // door on either side, bounded so nothing can wedge it open for good.
       bool minimumHeld = (now - stateStartTime) >= doorOpenTime;
-      bool waitedLong  = (now - stateStartTime) >= (doorOpenTime + DOOR_CLEAR_GRACE);
+      bool waitedLong  = (now - stateStartTime) >= (doorOpenTime + EXIT_CLEAR_GRACE);
 
       if ((minimumHeld && !anyoneAtDoor()) || waitedLong) {
         exitForcedClose = waitedLong && anyoneAtDoor();

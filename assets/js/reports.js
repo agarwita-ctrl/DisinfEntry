@@ -117,7 +117,11 @@
         datasets: [{
           label: 'Readings',
           data: dist.counts,
-          backgroundColor: dist.labels.map((l) => (l.includes('38.0') ? C.red : C.green)),
+          // Red from the bucket whose lower edge reaches the fever threshold ("37.5 - 38.0" straddles it).
+          backgroundColor: dist.labels.map((l) => {
+            const m = String(l).match(/\d+(\.\d+)?/);
+            return m && !/^\s*</.test(l) && parseFloat(m[0]) >= App.THRESHOLD ? C.red : C.green;
+          }),
           borderRadius: 5,
         }],
       },
@@ -205,8 +209,12 @@
   /* ---------------- Wiring ---------------- */
 
   $(document).ready(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const monthAgo = new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+    // Local calendar date: toISOString() is UTC, which is yesterday for the first hours of
+    // the day anywhere east of Greenwich and would leave today's entries out of the range.
+    const ymd = (d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const today = ymd(new Date());
+    const monthAgo = ymd(new Date(Date.now() - 29 * 86400000));
     $('#from').val(monthAgo);
     $('#to').val(today);
 

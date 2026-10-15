@@ -6,7 +6,7 @@
 # key in clear text, and it lives under the web root because it ships with the
 # project. Served, it hands both to anyone who can reach the site - and the API
 # key is the only thing standing in front of api/booth_sync.php.
-<FilesMatch "(\.(sql|md|ino|h|hpp|c|cpp|log|bak|ya?ml|ini)|^\.git.*)$">
+<FilesMatch "(\.(sql|md|ino|h|hpp|c|cpp|log|bak|ya?ml|ini)|^\..*|^Dockerfile.*)$">
   Require all denied
 </FilesMatch>
 
@@ -20,6 +20,9 @@
   # Firmware source. Denied by extension above as well; this covers anything
   # dropped in the folder later that the list does not name.
   RewriteRule ^esp32/ - [F,L]
+
+  # Container build files: the router script and Dockerfile are not meant to be served.
+  RewriteRule ^docker/ - [F,L]
 </IfModule>
 
 # Never render PHP errors to the browser.

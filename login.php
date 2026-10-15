@@ -13,7 +13,17 @@ if (is_logged_in()) {
 }
 
 $error  = '';
-$notice = isset($_GET['msg']) ? (string) $_GET['msg'] : '';
+// Only the app's own messages are shown: free text in ?msg= would let a crafted link put
+// any sentence inside a trusted-looking banner on the sign-in page.
+$allowedNotices = [
+    'Please sign in to continue.',
+    'Your session expired due to inactivity.',
+    'Your session expired. Please sign in again.',
+    'Your account is no longer active. Contact the administrator.',
+    'Your password was changed. Please sign in again.',
+    'You have been signed out.',
+];
+$notice = in_array((string) ($_GET['msg'] ?? ''), $allowedNotices, true) ? (string) $_GET['msg'] : '';
 $flash  = $_SESSION['flash'] ?? '';
 unset($_SESSION['flash']);
 $username = '';
@@ -34,7 +44,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute([$username]);
         $user = $stmt->fetch();
 
-        if (!$user || !password_verify($password, $user['password_hash'])) {
+        // Verify against a throwaway hash when the username does not exist, so an unknown
+        // name costs the same bcrypt time as a known one and response time reveals nothing.
+        $hash = $user ? $user['password_hash']
+                      : '$2y$12$y41UboqQkf3n0iXDeGbLMeu5ln4okjypRo0ITH6UjyDalV3BzRjva';
+        $passwordOk = password_verify($password, $hash);
+
+        if (!$user || !$passwordOk) {
             $error = 'Invalid username or password.';
             // This row is also what the throttle counts - see login_buckets().
             audit('Failed login attempt for "' . $username . '"', 'Authentication', null, $username);
@@ -66,8 +82,8 @@ $farmName = setting('farm_name', 'Poultry Farm');
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign In · <?= e($sysName) ?></title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128737;</text></svg>">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" integrity="sha384-XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+" crossorigin="anonymous">
 <link href="<?= url('assets/css/style.css') ?>" rel="stylesheet">
 </head>
 <body>
@@ -172,7 +188,7 @@ $farmName = setting('farm_name', 'Poultry Farm');
   </section>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <script>
 document.querySelectorAll('.pw-toggle').forEach((el) => {
   el.addEventListener('click', () => {

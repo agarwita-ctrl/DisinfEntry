@@ -39,6 +39,7 @@ CREATE TABLE `users` (
   `role`           ENUM('administrator','farm_manager') NOT NULL DEFAULT 'farm_manager',
   `status`         ENUM('active','inactive') NOT NULL DEFAULT 'active',
   `last_login`     DATETIME     DEFAULT NULL,
+  `password_changed_at` DATETIME DEFAULT NULL,
   `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

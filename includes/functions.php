@@ -113,12 +113,12 @@ function low_temp_note(float $tempC): string
  * the sync response share this list so the two can never drift apart.
  */
 const BOOTH_DIRECTIVE_RANGES = [
-    'fever_threshold_c'        => ['temperature_threshold', 37.8, 30.0, 45.0],
+    'fever_threshold_c'        => ['temperature_threshold', 37.8, 35.0, 40.0],
     'detection_distance_cm'    => ['detection_distance_cm', 50.0, 2.0, 400.0],
-    'presence_confirm_time_ms' => ['presence_confirm_ms',   5000, 1000, 60000],
-    'pump_on_time_ms'          => ['pump_on_ms',            2000, 200,  60000],
-    'pump_off_time_ms'         => ['pump_off_ms',           2000, 0,    60000],
-    'door_open_time_ms'        => ['door_open_ms',          5000, 500,  120000],
+    'presence_confirm_time_ms' => ['presence_confirm_ms',   5000, 1000, 30000],
+    'pump_on_time_ms'          => ['pump_on_ms',            2000, 200,  10000],
+    'pump_off_time_ms'         => ['pump_off_ms',           2000, 0,    10000],
+    'door_open_time_ms'        => ['door_open_ms',          5000, 500,  60000],
 ];
 
 /**
@@ -180,6 +180,32 @@ function asset_url(string $path): string
  * Prefixing with a single quote is the standard mitigation: spreadsheet
  * software then renders the text as-is instead of evaluating it.
  */
+/** The booth API key the seed data ships with. Public in the repository. */
+const DEFAULT_API_KEY = 'DISINF-ESP32-2024-CHANGE-ME';
+
+/**
+ * Checks the X-API-Key a device sent.
+ *
+ * The shipped default key is only honoured from a private or loopback address - a booth
+ * on the farm LAN talking to a local XAMPP server. Reached from a public address (a
+ * hosted deploy such as Railway), it is refused until the key is regenerated, because the
+ * default is published in the repository and would let anyone forge entries.
+ */
+function device_key_valid(string $provided): bool
+{
+    $expected = (string) setting('api_key', '');
+    if ($expected === '' || !hash_equals($expected, $provided)) {
+        return false;
+    }
+    if ($expected === DEFAULT_API_KEY) {
+        $public = filter_var(client_ip(), FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+        if ($public !== false) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function csv_safe(?string $value): string
 {
     $value = (string) $value;

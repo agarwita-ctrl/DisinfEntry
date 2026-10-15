@@ -81,16 +81,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 // No transport, so no token: one that cannot be delivered can only
                 // be leaked. The administrators get the request instead.
-                notify(
-                    'system',
-                    'Password Reset Requested',
-                    sprintf(
-                        'User "%s" (%s) asked for a password reset. Reset it directly in the database.',
-                        $user['username'],
-                        $user['full_name']
-                    ),
-                    'info'
+                $message = sprintf(
+                    'User "%s" (%s) asked for a password reset. Reset it directly in the database.',
+                    $user['username'],
+                    $user['full_name']
                 );
+                // One alert per user per hour: the per-IP throttle alone lets someone rotating
+                // addresses fill the administrators' notification list with the same request.
+                $dup = db()->prepare(
+                    'SELECT COUNT(*) FROM notifications
+                      WHERE type = "system" AND title = ? AND message = ?
+                        AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
+                );
+                $dup->execute(['Password Reset Requested', $message]);
+                if ((int) $dup->fetchColumn() === 0) {
+                    notify('system', 'Password Reset Requested', $message, 'info');
+                }
             }
 
             audit('Password reset requested', 'Authentication', (int) $user['id'], $user['username']);
@@ -133,8 +139,8 @@ $sysName = setting('system_name', 'DisinfEntry');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Forgot Password · <?= e($sysName) ?></title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" integrity="sha384-XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+" crossorigin="anonymous">
 <link href="<?= url('assets/css/style.css') ?>" rel="stylesheet">
 </head>
 <body>

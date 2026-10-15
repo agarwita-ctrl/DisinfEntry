@@ -15,7 +15,7 @@ every entry in real time.
 | Layer     | Technology |
 |-----------|------------|
 | Backend   | PHP 8.2+, PDO, REST API (JSON) |
-| Database  | MySQL / MariaDB |
+| Database  | MariaDB 10.4+ (migrations 001-002 use MariaDB-only `IF NOT EXISTS` DDL; on MySQL 8 do a fresh install from `database/disinfentry.sql`) |
 | Server    | Apache (XAMPP) |
 | Frontend  | HTML5, CSS3, Bootstrap 5.3, JavaScript ES6, AJAX |
 | Charts    | Chart.js 4 |

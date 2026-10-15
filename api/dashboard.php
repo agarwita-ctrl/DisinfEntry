@@ -220,12 +220,19 @@ function build_recent(PDO $pdo, int $limit = 10): array
 function build_exits(PDO $pdo, int $limit = 10): array
 {
     $limit = max(1, min(50, $limit));
-    $stmt  = $pdo->query(
-        'SELECT id, device_id, distance_cm, exited_at
-           FROM booth_exits
-          ORDER BY exited_at DESC, id DESC
-          LIMIT ' . $limit
-    );
+
+    // The panel is optional: on a database that has not had migration 004 yet it is empty,
+    // instead of failing the whole dashboard (stats and charts included).
+    try {
+        $stmt = $pdo->query(
+            'SELECT id, device_id, distance_cm, exited_at
+               FROM booth_exits
+              ORDER BY exited_at DESC, id DESC
+              LIMIT ' . $limit
+        );
+    } catch (PDOException $e) {
+        return ['rows' => [], 'today' => 0];
+    }
 
     $today = date('Y-m-d');
     $rows  = array_map(static fn(array $r): array => [

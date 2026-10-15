@@ -51,6 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')
                 ->execute([hash_password($new), (int) $me['id']]);
+            mark_password_changed((int) $me['id']);
             audit('Changed own password', 'Profile');
             unset($_SESSION['must_change_password']);
             $success = 'Your password has been changed.';

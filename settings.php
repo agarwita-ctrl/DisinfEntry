@@ -103,7 +103,7 @@ require __DIR__ . '/includes/header.php';
             </label>
             <div class="input-group">
               <input type="number" class="form-control" id="temperature_threshold" name="temperature_threshold"
-                     value="<?= e($s['temperature_threshold'] ?? '37.8') ?>" step="0.1" min="30" max="45" required>
+                     value="<?= e($s['temperature_threshold'] ?? '37.8') ?>" step="0.1" min="35" max="40" required>
               <span class="input-group-text">&deg;C</span>
             </div>
             <div class="form-text">
@@ -181,7 +181,7 @@ require __DIR__ . '/includes/header.php';
               <label class="form-label" for="presence_confirm_ms">Presence Confirmation</label>
               <div class="input-group">
                 <input type="number" class="form-control" id="presence_confirm_ms" name="presence_confirm_ms"
-                       value="<?= e($s['presence_confirm_ms'] ?? '5000') ?>" step="100" min="1000" max="60000" required>
+                       value="<?= e($s['presence_confirm_ms'] ?? '5000') ?>" step="100" min="1000" max="30000" required>
                 <span class="input-group-text">ms</span>
               </div>
               <div class="form-text">How long they must stay before screening.</div>
@@ -191,7 +191,7 @@ require __DIR__ . '/includes/header.php';
               <label class="form-label" for="pump_on_ms">Spray Burst</label>
               <div class="input-group">
                 <input type="number" class="form-control" id="pump_on_ms" name="pump_on_ms"
-                       value="<?= e($s['pump_on_ms'] ?? '2000') ?>" step="100" min="200" max="60000" required>
+                       value="<?= e($s['pump_on_ms'] ?? '2000') ?>" step="100" min="200" max="10000" required>
                 <span class="input-group-text">ms</span>
               </div>
               <div class="form-text">Each of the two bursts.</div>
@@ -201,7 +201,7 @@ require __DIR__ . '/includes/header.php';
               <label class="form-label" for="pump_off_ms">Between Bursts</label>
               <div class="input-group">
                 <input type="number" class="form-control" id="pump_off_ms" name="pump_off_ms"
-                       value="<?= e($s['pump_off_ms'] ?? '2000') ?>" step="100" min="0" max="60000" required>
+                       value="<?= e($s['pump_off_ms'] ?? '2000') ?>" step="100" min="0" max="10000" required>
                 <span class="input-group-text">ms</span>
               </div>
             </div>
@@ -210,7 +210,7 @@ require __DIR__ . '/includes/header.php';
               <label class="form-label" for="door_open_ms">Door Hold Open</label>
               <div class="input-group">
                 <input type="number" class="form-control" id="door_open_ms" name="door_open_ms"
-                       value="<?= e($s['door_open_ms'] ?? '5000') ?>" step="100" min="500" max="120000" required>
+                       value="<?= e($s['door_open_ms'] ?? '5000') ?>" step="100" min="500" max="60000" required>
                 <span class="input-group-text">ms</span>
               </div>
             </div>
