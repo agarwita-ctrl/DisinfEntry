@@ -161,7 +161,11 @@ First sign-in:
    you will keep.
 2. **System Settings**: set farm name, system name and **timezone**.
 3. **System Settings -> Booth API Access -> Regenerate** the API key and keep it for the booth
-   firmware. Until you do, an admin banner warns that the key is still the public default.
+   firmware. Until you do, an admin banner warns that the key is still the public default - and
+   the server refuses that default key when the request comes from the internet, so the booth
+   cannot sync to Railway with it. Put the new key in the booth's `secrets.h` and reflash.
+4. Run `database/migrations/004_booth_exits.sql` and `005_password_changed_at.sql` against the
+   Railway database (the connection from Part 4) if you imported the schema before they existed.
 
 ---
 
