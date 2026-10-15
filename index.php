@@ -171,9 +171,14 @@ require __DIR__ . '/includes/header.php';
 <div class="card mt-3">
   <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
     <span><i class="bi bi-box-arrow-right me-2"></i>Recent Exits</span>
-    <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">
-      <span id="exitsToday">0</span> today
-    </span>
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">
+        <span id="exitsToday">0</span> today
+      </span>
+      <a href="<?= url('exits.php') ?>" class="btn btn-sm btn-outline-primary">
+        View all <i class="bi bi-arrow-right ms-1"></i>
+      </a>
+    </div>
   </div>
   <div class="table-responsive">
     <table class="table table-hover align-middle mb-0">

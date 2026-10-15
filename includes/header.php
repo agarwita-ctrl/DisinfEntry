@@ -18,6 +18,7 @@ $navItems   = [
     ['key' => 'dashboard',  'label' => 'Dashboard',        'icon' => 'grid',        'href' => 'index.php',      'admin' => false],
     ['key' => 'live',       'label' => 'Live Monitoring',  'icon' => 'broadcast',   'href' => 'live.php',       'admin' => false],
     ['key' => 'entries',    'label' => 'Entry Monitoring', 'icon' => 'list-check',  'href' => 'entries.php',    'admin' => false],
+    ['key' => 'exits',      'label' => 'Exit Monitoring',  'icon' => 'box-arrow-right', 'href' => 'exits.php',  'admin' => false],
     ['key' => 'reports',    'label' => 'Reports',          'icon' => 'file-earmark-bar-graph', 'href' => 'reports.php', 'admin' => false],
     ['key' => 'notifs',     'label' => 'Notifications',    'icon' => 'bell',        'href' => 'notifications.php', 'admin' => false],
     ['key' => 'settings',   'label' => 'System Settings',  'icon' => 'gear',        'href' => 'settings.php',   'admin' => true],
@@ -66,7 +67,7 @@ $navItems   = [
       <div class="nav-section">Main</div>
       <?php foreach ($navItems as $i => $item):
           if ($item['admin'] && !is_admin()) { continue; }
-          if ($i === 5) { echo '<div class="nav-section">Administration</div>'; }
+          if ($item['key'] === 'settings') { echo '<div class="nav-section">Administration</div>'; }
       ?>
         <a class="nav-link<?= $ACTIVE === $item['key'] ? ' active' : '' ?>" href="<?= url($item['href']) ?>">
           <i class="bi bi-<?= e($item['icon']) ?>"></i>
