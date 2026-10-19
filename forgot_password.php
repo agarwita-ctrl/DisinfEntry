@@ -14,8 +14,7 @@
  *                         rendered; the token exists only in the message.
  *   MAIL_ENABLED = false  no token is issued at all. The request is recorded and
  *                         raised to the administrators, who reset the password
- *                         directly in the database (the User Management page
- *                         has been removed).
+ *                         from the User Management page (Administration menu).
  *
  * The response is identical whether or not the account exists, so the page
  * cannot be used to enumerate usernames - which the old code intended but
@@ -82,20 +81,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // No transport, so no token: one that cannot be delivered can only
                 // be leaked. The administrators get the request instead.
                 $message = sprintf(
-                    'User "%s" (%s) asked for a password reset. Reset it directly in the database.',
+                    'User "%s" (%s) asked for a password reset. Reset it under Administration > User Management.',
                     $user['username'],
                     $user['full_name']
                 );
-                // One alert per user per hour: the per-IP throttle alone lets someone rotating
-                // addresses fill the administrators' notification list with the same request.
+                // One UNREAD alert per user: repeats of a request nobody has looked at yet add
+                // nothing, but once an administrator has read it a new request alerts again.
                 $dup = db()->prepare(
                     'SELECT COUNT(*) FROM notifications
-                      WHERE type = "system" AND title = ? AND message = ?
-                        AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
+                      WHERE type = "system" AND title = ? AND message = ? AND is_read = 0'
                 );
                 $dup->execute(['Password Reset Requested', $message]);
                 if ((int) $dup->fetchColumn() === 0) {
-                    notify('system', 'Password Reset Requested', $message, 'info');
+                    notify('system', 'Password Reset Requested', $message, 'warning');
                 }
             }
 
