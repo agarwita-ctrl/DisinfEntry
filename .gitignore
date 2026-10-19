@@ -1,5 +1,6 @@
 # --- Secrets and machine-specific config -------------------------------
 config/database.local.php
+config/mail.local.php
 esp32/DisinfEntry_Booth/secrets.h
 .env
 .env.*

@@ -164,9 +164,35 @@ First sign-in:
    firmware. Until you do, an admin banner warns that the key is still the public default - and
    the server refuses that default key when the request comes from the internet, so the booth
    cannot sync to Railway with it. Put the new key in the booth's `secrets.h` and reflash.
-4. Run `database/migrations/004_booth_exits.sql`, `005_password_changed_at.sql` and
-   `006_must_change_password.sql` against the
+4. Run `database/migrations/004_booth_exits.sql`, `005_password_changed_at.sql`,
+   `006_must_change_password.sql` and `007_user_email.sql` against the
    Railway database (the connection from Part 4) if you imported the schema before they existed.
+
+---
+
+## Part 6b - E-mail for temporary passwords
+
+User Management e-mails a temporary password to the user's registered address when an admin
+creates an account or resets a password. The admin never sees it. Railway's lower plans block
+SMTP, so the app sends through an HTTPS e-mail API - **Resend** or **Brevo** (both have a free tier).
+
+1. Create an account and an **API key** with the provider. Verify a sender: with Resend, a domain
+   you own (until then it only delivers to your own address); with Brevo, a sender address.
+2. On the **web service -> Variables**, add:
+
+```
+DISINFENTRY_MAIL_PROVIDER=resend
+DISINFENTRY_MAIL_API_KEY=<the provider's API key>
+DISINFENTRY_MAIL_FROM=DisinfEntry <noreply@your-verified-domain>
+DISINFENTRY_BASE_URL=https://<something>.up.railway.app
+```
+
+   (`brevo` instead of `resend` for Brevo. `DISINFENTRY_BASE_URL` is optional and only adds a
+   sign-in link to the message.)
+3. Run `database/migrations/007_user_email.sql` too, then open **User Management** and give every
+   existing account an e-mail address (Edit). Until an account has one, its password cannot be reset.
+
+For local XAMPP, copy `config/mail.local.example.php` to `config/mail.local.php` instead.
 
 ---
 

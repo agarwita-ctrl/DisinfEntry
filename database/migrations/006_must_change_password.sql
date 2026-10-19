@@ -14,7 +14,7 @@
 --  A fresh install does not need this file - database/disinfentry.sql carries it.
 -- ============================================================
 
-USE `disinfentry`;
+USE `railway`;
 
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS
               WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'

@@ -29,7 +29,7 @@ require __DIR__ . '/includes/header.php';
       <thead>
         <tr>
           <th>Employee ID</th>
-          <th>Name</th>
+          <th>Name / E-mail</th>
           <th>Username</th>
           <th>Role</th>
           <th>Status</th>
@@ -43,9 +43,10 @@ require __DIR__ . '/includes/header.php';
     </table>
   </div>
   <div class="card-footer small text-muted">
-    A forgotten password is reset here: the user gets a one-time temporary password from you and
-    is asked to choose their own at their next sign-in. Accounts are deactivated, never deleted,
-    so the audit trail keeps its history.
+    A forgotten password is reset here: a one-time temporary password is generated and
+    <strong>e-mailed to the user's registered address</strong> - you never see it. They are asked to
+    choose their own at their next sign-in. Accounts are deactivated, never deleted, so the audit
+    trail keeps its history.
   </div>
 </div>
 
@@ -67,6 +68,11 @@ require __DIR__ . '/includes/header.php';
           <label class="form-label" for="uUsername">Username <span class="text-danger">*</span></label>
           <input type="text" class="form-control" id="uUsername" maxlength="60" autocomplete="off">
           <div class="form-text">3-60 characters: letters, digits, dot, dash, underscore. Cannot be changed later.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="uEmail">E-mail address <span class="text-danger">*</span></label>
+          <input type="email" class="form-control" id="uEmail" maxlength="190" autocomplete="off" required>
+          <div class="form-text">Temporary passwords are sent here, so it must be an address the user can read.</div>
         </div>
         <div class="row g-3">
           <div class="col-sm-6">
@@ -92,30 +98,6 @@ require __DIR__ . '/includes/header.php';
         <button type="submit" class="btn btn-primary" id="userSave">Save</button>
       </div>
     </form>
-  </div>
-</div>
-
-<!-- One-time temporary password -->
-<div class="modal fade" id="tempModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-key me-2"></i>Temporary password</h5>
-      </div>
-      <div class="modal-body">
-        <p class="mb-2">Give this to <strong id="tempUser"></strong>. It is shown <strong>only once</strong>
-          and cannot be looked up again; they must choose their own password when they sign in.</p>
-        <div class="input-group">
-          <input type="text" class="form-control font-monospace fs-5" id="tempValue" readonly>
-          <button type="button" class="btn btn-outline-secondary" id="tempCopy">
-            <i class="bi bi-clipboard me-1"></i>Copy
-          </button>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">I have noted it</button>
-      </div>
-    </div>
   </div>
 </div>
 

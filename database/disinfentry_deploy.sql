@@ -5,7 +5,7 @@
 --  Import this into that database. It has no CREATE DATABASE / USE statements on
 --  purpose: hosted databases come with their own name.
 --
---  Schema = database/disinfentry.sql with migrations 001-006 already applied,
+--  Schema = database/disinfentry.sql with migrations 001-007 already applied,
 --  tables created in foreign-key order. Seed = default settings, two default
 --  accounts (admin / manager) and one booth.
 --
@@ -137,6 +137,7 @@ CREATE TABLE `users` (
   `employee_id` varchar(30) NOT NULL,
   `full_name` varchar(120) NOT NULL,
   `contact_number` varchar(30) DEFAULT NULL,
+  `email` varchar(190) DEFAULT NULL,
   `username` varchar(60) NOT NULL,
   `password_hash` varchar(255) NOT NULL,
   `role` enum('administrator','farm_manager') NOT NULL DEFAULT 'farm_manager',
@@ -149,6 +150,7 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_users_username` (`username`),
   UNIQUE KEY `uq_users_employee` (`employee_id`),
+  UNIQUE KEY `uq_users_email` (`email`),
   KEY `ix_users_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

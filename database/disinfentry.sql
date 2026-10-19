@@ -34,6 +34,7 @@ CREATE TABLE `users` (
   `employee_id`    VARCHAR(30)  NOT NULL,
   `full_name`      VARCHAR(120) NOT NULL,
   `contact_number` VARCHAR(30)  DEFAULT NULL,
+  `email`          VARCHAR(190) DEFAULT NULL,
   `username`       VARCHAR(60)  NOT NULL,
   `password_hash`  VARCHAR(255) NOT NULL,
   `role`           ENUM('administrator','farm_manager') NOT NULL DEFAULT 'farm_manager',
@@ -46,6 +47,7 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_users_username` (`username`),
   UNIQUE KEY `uq_users_employee` (`employee_id`),
+  UNIQUE KEY `uq_users_email` (`email`),
   KEY `ix_users_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
