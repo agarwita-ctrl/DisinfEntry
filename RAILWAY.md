@@ -164,7 +164,8 @@ First sign-in:
    firmware. Until you do, an admin banner warns that the key is still the public default - and
    the server refuses that default key when the request comes from the internet, so the booth
    cannot sync to Railway with it. Put the new key in the booth's `secrets.h` and reflash.
-4. Run `database/migrations/004_booth_exits.sql` and `005_password_changed_at.sql` against the
+4. Run `database/migrations/004_booth_exits.sql`, `005_password_changed_at.sql` and
+   `006_must_change_password.sql` against the
    Railway database (the connection from Part 4) if you imported the schema before they existed.
 
 ---

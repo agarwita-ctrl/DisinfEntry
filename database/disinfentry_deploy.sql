@@ -5,7 +5,7 @@
 --  Import this into that database. It has no CREATE DATABASE / USE statements on
 --  purpose: hosted databases come with their own name.
 --
---  Schema = database/disinfentry.sql with migrations 001-005 already applied,
+--  Schema = database/disinfentry.sql with migrations 001-006 already applied,
 --  tables created in foreign-key order. Seed = default settings, two default
 --  accounts (admin / manager) and one booth.
 --
@@ -143,6 +143,7 @@ CREATE TABLE `users` (
   `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `last_login` datetime DEFAULT NULL,
   `password_changed_at` datetime DEFAULT NULL,
+  `must_change_password` tinyint(1) NOT NULL DEFAULT 0,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),

@@ -52,6 +52,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')
                 ->execute([hash_password($new), (int) $me['id']]);
             mark_password_changed((int) $me['id']);
+            try {
+                db()->prepare('UPDATE users SET must_change_password = 0 WHERE id = ?')->execute([(int) $me['id']]);
+            } catch (PDOException $e) {
+                // migration 006 not applied: there is no flag to clear
+            }
             audit('Changed own password', 'Profile');
             unset($_SESSION['must_change_password']);
             $success = 'Your password has been changed.';

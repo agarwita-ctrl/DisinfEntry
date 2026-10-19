@@ -22,6 +22,7 @@ $navItems   = [
     ['key' => 'reports',    'label' => 'Reports',          'icon' => 'file-earmark-bar-graph', 'href' => 'reports.php', 'admin' => false],
     ['key' => 'notifs',     'label' => 'Notifications',    'icon' => 'bell',        'href' => 'notifications.php', 'admin' => false],
     ['key' => 'settings',   'label' => 'System Settings',  'icon' => 'gear',        'href' => 'settings.php',   'admin' => true],
+    ['key' => 'users',      'label' => 'User Management',  'icon' => 'people',     'href' => 'users.php',      'admin' => true],
     ['key' => 'audit',      'label' => 'Audit Logs',       'icon' => 'clock-history', 'href' => 'audit_logs.php', 'admin' => true],
 ];
 ?>

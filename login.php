@@ -64,7 +64,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ->execute([hash_password($password), (int) $user['id']]);
             }
             login_user($user);
-            $_SESSION['must_change_password'] = in_array($password, DEFAULT_PASSWORDS, true);
+            $_SESSION['must_change_password'] = in_array($password, DEFAULT_PASSWORDS, true)
+                || !empty($user['must_change_password']);   // set by User Management (migration 006)
             audit('User logged in', 'Authentication');
             header('Location: ' . url('index.php'));
             exit;

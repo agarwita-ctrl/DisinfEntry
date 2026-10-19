@@ -40,6 +40,7 @@ CREATE TABLE `users` (
   `status`         ENUM('active','inactive') NOT NULL DEFAULT 'active',
   `last_login`     DATETIME     DEFAULT NULL,
   `password_changed_at` DATETIME DEFAULT NULL,
+  `must_change_password` TINYINT(1) NOT NULL DEFAULT 0,
   `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
