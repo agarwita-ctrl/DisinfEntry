@@ -12,7 +12,7 @@
 --  already carries it.
 -- ============================================================
 
-USE `disinfentry`;
+USE `railway`;
 
 CREATE TABLE IF NOT EXISTS `booth_exits` (
   `id`                 INT UNSIGNED NOT NULL AUTO_INCREMENT,
