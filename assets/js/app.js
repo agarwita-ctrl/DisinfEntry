@@ -263,6 +263,41 @@ const App = (() => {
 
   /* ---------------- Device status pill ---------------- */
 
+  // Remembered per tab, keyed by the booth's last_seen (which identifies one outage), so the
+  // popup shows once per outage - on the transition, or on the first page load that finds
+  // the booth already down - and not again on every poll or every page you open.
+  let boothWasOnline = null;
+
+  function announceBoothState(d) {
+    const key = 'disinf_offline_alerted';
+    let alerted = null;
+    try { alerted = sessionStorage.getItem(key); } catch { /* storage blocked */ }
+
+    if (!d.online) {
+      const outage = String(d.last_seen || 'never');
+      if (alerted !== outage) {
+        try { sessionStorage.setItem(key, outage); } catch { /* storage blocked */ }
+        playSound('alert');
+        alertPopup({
+          title: 'Booth Offline',
+          message: `${d.device_name} has not reported since ${d.last_seen ? timeAgo(d.last_seen) : 'it was registered'}. ` +
+                   'Check its power and WiFi - until it is back, nobody is being screened or logged.',
+          severity: 'warning',
+        });
+        pollNotifications();   // the server raises the alert on this same poll; refresh the bell
+      }
+    } else {
+      if (alerted !== null) {
+        try { sessionStorage.removeItem(key); } catch { /* storage blocked */ }
+      }
+      if (boothWasOnline === false) {
+        toast(`${d.device_name} is back online.`, 'success', 'Booth Online');
+        pollNotifications();
+      }
+    }
+    boothWasOnline = d.online;
+  }
+
   async function pollDeviceStatus() {
     const pill = document.getElementById('deviceStatusPill');
     if (!pill) return;
@@ -275,6 +310,8 @@ const App = (() => {
       }
       const dot = d.online ? 'bg-success' : 'bg-danger';
       const label = d.online ? 'Booth online' : 'Booth offline';
+
+      announceBoothState(d);
 
       // null means no sensor has reported a level - which is every booth on the
       // current firmware. Interpolating it raw printed a bare "%".

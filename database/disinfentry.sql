@@ -340,7 +340,7 @@ CREATE TABLE `settings` (
 -- ============================================================
 
 INSERT INTO `settings` (`setting_key`,`setting_value`) VALUES
-  ('farm_name',             'Sunrise Poultry Farm'),
+  ('farm_name',             'RJ Poultry Farm'),
   ('system_name',           'DisinfEntry'),
   ('temperature_threshold', '37.8'),
   ('disinfection_duration', '8'),

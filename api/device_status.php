@@ -103,6 +103,46 @@ foreach ($devices as $d) {
     }
 }
 
+/**
+ * Tell the administrators when a booth that went offline is reporting again, once per
+ * outage: an offline alert newer than any "back online" notice for the same booth. Only
+ * outages in the last two hours count - the offline alert repeats hourly while it lasts,
+ * so a recovery always finds a recent one, and an old one is not announced late.
+ */
+foreach ($devices as $d) {
+    if (!$d['online']) {
+        continue;
+    }
+    $like = '%(' . addcslashes($d['device_id'], '%_\\') . ')%';
+
+    $off = db()->prepare(
+        'SELECT MAX(created_at) FROM notifications
+          WHERE type = "device_offline" AND message LIKE ?
+            AND created_at > DATE_SUB(NOW(), INTERVAL 2 HOUR)'
+    );
+    $off->execute([$like]);
+    $lastOffline = $off->fetchColumn();
+    if (!$lastOffline) {
+        continue;
+    }
+
+    $on = db()->prepare(
+        'SELECT MAX(created_at) FROM notifications
+          WHERE type = "system" AND title = "Booth Back Online" AND message LIKE ?'
+    );
+    $on->execute([$like]);
+    $lastOnline = $on->fetchColumn();
+
+    if (!$lastOnline || $lastOnline < $lastOffline) {
+        notify(
+            'system',
+            'Booth Back Online',
+            sprintf('%s (%s) is reporting again.', $d['device_name'], $d['device_id']),
+            'info'
+        );
+    }
+}
+
 json_response([
     'success' => true,
     'devices' => array_map(static fn(array $d): array => [
