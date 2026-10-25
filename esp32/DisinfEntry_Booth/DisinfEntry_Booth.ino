@@ -36,6 +36,14 @@
         then by mDNS name, then by sweeping the subnet - so a new DHCP lease
         does not mean reflashing. See SERVER_HOSTNAME below.
 
+    Reporting to a hosted server AND the local one: with SERVER_URL_VALUE set the booth
+    reports to that hosted address; define ALSO_LOCAL_SERVER in secrets.h and it reports to
+    the local XAMPP server as well. The two are independent targets - each has its own API
+    key (LOCAL_API_KEY_VALUE for the local one), its own retry back-off and its own
+    position in the queues - so one being down never loses or delays data for the other.
+    Settings (threshold, spray timings) are adopted from the first target only: the hosted
+    server when there is one, otherwise the local one.
+
     The server records each cycle, publishes it to the entry log, and answers
     with the settings the booth should adopt - so the threshold and the spray
     timings can be retuned from System Settings without reflashing.
@@ -94,6 +102,15 @@
 #endif
 const char* SERVER_URL = SERVER_URL_VALUE;
 
+// ---------- Local server alongside a hosted one ----------
+// Optional, both set in secrets.h:
+//     #define ALSO_LOCAL_SERVER                     // report to the local XAMPP server too
+//     #define LOCAL_API_KEY_VALUE "the-local-key"   // its key, if it differs from API_KEY
+// Without SERVER_URL_VALUE the booth reports to the local server alone, as before.
+#ifndef LOCAL_API_KEY_VALUE
+  #define LOCAL_API_KEY_VALUE ""
+#endif
+
 // A TLS handshake takes a second or two, so https gets more time than plain http.
 // Still bounded: syncing only runs while the booth is idle with nobody in range.
 const uint16_t HTTPS_TIMEOUT_MS = 8000;
@@ -125,7 +142,7 @@ const uint16_t SERVER_PORT  = 80;
 
 const char* DEVICE_ID    = "ESP32-BOOTH-01";
 const char* DEVICE_NAME   = "Main Gate Booth";
-const char* FIRMWARE      = "1.3.0";
+const char* FIRMWARE      = "1.4.0";
 
 // ---------- Pin configuration ----------
 const int TRIG_PIN   = 5;    // entry-side sensor (outside, where people get screened)
@@ -302,10 +319,6 @@ bool          exitForcedClose = false;
 String bootId;                    // new on every reset; scopes every uptime_ms
 bool   mlxOk = true;
 unsigned long lastMlxRetry = 0;   // paced re-attempts while the thermometer is missing
-bool   bootReported = false;      // send the "boot" section until one sync lands
-bool   configDirty = true;        // send the "config" section when it changed
-unsigned long lastSyncAttempt = 0;
-unsigned long lastSyncOk = 0;
 uint32_t droppedSamples = 0;
 uint32_t droppedCycles = 0;
 uint32_t droppedExits = 0;
@@ -317,16 +330,68 @@ uint32_t droppedExits = 0;
 enum DiscoveryPhase { DISC_REMEMBERED, DISC_MDNS, DISC_SWEEP };
 
 Preferences     prefs;                 // NVS: survives a reset, so the search runs once
-String          serverHost;            // resolved address in use; empty = still looking
-uint32_t        serverNet = 0;         // network it was found on, to spot a move
-DiscoveryPhase  discPhase = DISC_REMEMBERED;
-uint16_t        scanOctet = 1;         // sweep position, so a pass resumes where it stopped
-uint8_t         connFailures = 0;
-uint8_t         syncFailStreak = 0;    // consecutive failed POSTs; drives the retry back-off
+
+// ---------- Sync targets ----------
+// One per server the booth reports to: [0] the hosted server (SERVER_URL_VALUE), [1] the
+// local XAMPP server. Everything that used to be a single global about "the server" lives
+// here, so the two can be up, down, slow or rejecting independently.
+enum TargetIndex { TARGET_REMOTE = 0, TARGET_LOCAL = 1 };
+const size_t TARGET_COUNT = 2;
+
+struct SyncTarget {
+  bool        enabled = false;
+  bool        fixedUrl = false;          // true: SERVER_URL; false: found on the local network
+  const char* label = "";
+  const char* apiKey = "";
+
+  // retry / heartbeat bookkeeping
+  unsigned long lastSyncAttempt = 0;
+  unsigned long lastSyncOk = 0;
+  uint8_t       syncFailStreak = 0;      // consecutive failed POSTs; drives the retry back-off
+  bool          bootReported = false;    // send the "boot" section until one sync lands
+  bool          configDirty = true;      // send the "config" section when it changed
+
+  // How many items at the HEAD of each queue this server already has. An item leaves its
+  // queue only once every enabled target has it (see compactQueues).
+  size_t cycSent = 0, exitSent = 0, distSent = 0, tempSent = 0;
+
+  // Server discovery (the local target only)
+  String         serverHost;             // resolved address in use; empty = still looking
+  uint32_t       serverNet = 0;          // network it was found on, to spot a move
+  DiscoveryPhase discPhase = DISC_REMEMBERED;
+  uint16_t       scanOctet = 1;          // sweep position, so a pass resumes where it stopped
+  uint8_t        connFailures = 0;
+};
+
+SyncTarget targets[TARGET_COUNT];
+uint8_t    nextTarget = 0;               // round-robin, so neither starves the other
 
 // ---------- Fixed-server helpers (see SERVER_URL_VALUE in secrets.h) ----------
 bool usingFixedServer() { return SERVER_URL[0] != '\0'; }
 bool serverIsHttps()    { return strncmp(SERVER_URL, "https://", 8) == 0; }
+
+/** The target whose answers set the booth's settings: hosted if there is one, else local. */
+bool isPrimary(const SyncTarget& t) {
+  return &t == &targets[targets[TARGET_REMOTE].enabled ? TARGET_REMOTE : TARGET_LOCAL];
+}
+
+void initTargets() {
+  SyncTarget& remote = targets[TARGET_REMOTE];
+  remote.enabled  = usingFixedServer();
+  remote.fixedUrl = true;
+  remote.label    = "hosted server";
+  remote.apiKey   = API_KEY;
+
+  bool localOn = !usingFixedServer();   // the only server, when no hosted address is set
+#ifdef ALSO_LOCAL_SERVER
+  localOn = true;
+#endif
+  SyncTarget& local = targets[TARGET_LOCAL];
+  local.enabled  = localOn;
+  local.fixedUrl = false;
+  local.label    = "local server";
+  local.apiKey   = LOCAL_API_KEY_VALUE[0] != '\0' ? LOCAL_API_KEY_VALUE : API_KEY;
+}
 
 /**
  * Prepares a TLS client.
@@ -506,6 +571,7 @@ void pushExit(uint32_t uptime, float cm) {
     for (size_t i = 1; i < MAX_PENDING_EXITS; i++) pendingExits[i - 1] = pendingExits[i];
     pendingExitCount--;
     droppedExits++;
+    for (auto& t : targets) if (t.exitSent > 0) t.exitSent--;
     Serial.println("!! Exit queue full - dropped the oldest unsent exit.");
   }
   pendingExits[pendingExitCount++] = { uptime, cm };
@@ -518,6 +584,7 @@ void pushDistance(float cm, bool inRange, uint32_t uptime) {
     distHead = (distHead + 1) % DISTANCE_BUFFER;
     distCount--;
     droppedSamples++;
+    for (auto& t : targets) if (t.distSent > 0) t.distSent--;
   }
   size_t at = (distHead + distCount) % DISTANCE_BUFFER;
   distBuf[at] = { cm, inRange, uptime };
@@ -534,10 +601,62 @@ void pushTemp(float object, float ambient, bool screening, uint32_t uptime) {
     tempHead = (tempHead + 1) % TEMP_BUFFER;
     tempCount--;
     droppedSamples++;
+    for (auto& t : targets) if (t.tempSent > 0) t.tempSent--;
   }
   size_t at = (tempHead + tempCount) % TEMP_BUFFER;
   tempBuf[at] = { object, ambient, screening, uptime };
   tempCount++;
+}
+
+/**
+ * The smallest "already delivered" count among the enabled targets: that many items at the
+ * head of a queue are safe to discard.
+ */
+size_t minSent(size_t SyncTarget::*field) {
+  size_t m = 0;
+  bool any = false;
+  for (auto& t : targets) {
+    if (!t.enabled) continue;
+    if (!any || t.*field < m) m = t.*field;
+    any = true;
+  }
+  return any ? m : 0;
+}
+
+/** Drops everything every enabled target has acknowledged, and rebases their cursors. */
+void compactQueues() {
+  size_t k = minSent(&SyncTarget::cycSent);
+  if (k > pendingCycleCount) k = pendingCycleCount;
+  if (k) {
+    for (size_t i = k; i < pendingCycleCount; i++) pendingCycles[i - k] = pendingCycles[i];
+    for (size_t i = pendingCycleCount - k; i < pendingCycleCount; i++) pendingCycles[i] = String();
+    pendingCycleCount -= k;
+    for (auto& t : targets) if (t.enabled) t.cycSent -= k;
+  }
+
+  k = minSent(&SyncTarget::exitSent);
+  if (k > pendingExitCount) k = pendingExitCount;
+  if (k) {
+    for (size_t i = k; i < pendingExitCount; i++) pendingExits[i - k] = pendingExits[i];
+    pendingExitCount -= k;
+    for (auto& t : targets) if (t.enabled) t.exitSent -= k;
+  }
+
+  k = minSent(&SyncTarget::distSent);
+  if (k > distCount) k = distCount;
+  if (k) {
+    distHead = (distHead + k) % DISTANCE_BUFFER;
+    distCount -= k;
+    for (auto& t : targets) if (t.enabled) t.distSent -= k;
+  }
+
+  k = minSent(&SyncTarget::tempSent);
+  if (k > tempCount) k = tempCount;
+  if (k) {
+    tempHead = (tempHead + k) % TEMP_BUFFER;
+    tempCount -= k;
+    for (auto& t : targets) if (t.enabled) t.tempSent -= k;
+  }
 }
 
 /* ============================================================
@@ -695,7 +814,7 @@ String buildCycleJson(uint32_t endedUptime) {
   return c;
 }
 
-String buildPayload() {
+String buildPayload(const SyncTarget& t) {
   String p;
   p.reserve(14336);   // a full queue is ~13 KB; reserve it once so it cannot grow (and fragment) mid-handshake
 
@@ -706,29 +825,29 @@ String buildPayload() {
   p += ",\"uptime_ms\":" + String(millis());
   p += ",\"state\":\"" + String(stateName(currentState)) + "\"";
 
-  if (!bootReported) {
+  if (!t.bootReported) {
     p += ",\"boot\":{\"mlx_ok\":";
     p += mlxOk ? "true" : "false";
     p += ",\"message\":\"Smart Disinfectant ready.\"}";
   }
 
-  if (configDirty) {
+  if (t.configDirty) {
     p += ",\"config\":" + buildConfigJson();
   }
 
-  if (pendingCycleCount) {
+  if (pendingCycleCount > t.cycSent) {
     p += ",\"cycles\":[";
-    for (size_t i = 0; i < pendingCycleCount; i++) {
-      if (i) p += ',';
+    for (size_t i = t.cycSent; i < pendingCycleCount; i++) {
+      if (i > t.cycSent) p += ',';
       p += pendingCycles[i];
     }
     p += "]";
   }
 
-  if (pendingExitCount) {
+  if (pendingExitCount > t.exitSent) {
     p += ",\"exits\":[";
-    for (size_t i = 0; i < pendingExitCount; i++) {
-      if (i) p += ',';
+    for (size_t i = t.exitSent; i < pendingExitCount; i++) {
+      if (i > t.exitSent) p += ',';
       p += "{\"uptime_ms\":" + String(pendingExits[i].uptime);
       p += ",\"distance_cm\":"; appendDistance(p, pendingExits[i].cm, 1);
       p += "}";
@@ -736,11 +855,11 @@ String buildPayload() {
     p += "]";
   }
 
-  if (distCount) {
+  if (distCount > t.distSent) {
     p += ",\"distance\":[";
-    for (size_t i = 0; i < distCount; i++) {
+    for (size_t i = t.distSent; i < distCount; i++) {
       const DistanceSample& s = distBuf[(distHead + i) % DISTANCE_BUFFER];
-      if (i) p += ',';
+      if (i > t.distSent) p += ',';
       p += "{\"distance_cm\":"; appendDistance(p, s.cm, 1);
       p += ",\"in_range\":";    p += s.inRange ? "true" : "false";
       p += ",\"uptime_ms\":" + String(s.uptime) + "}";
@@ -748,11 +867,11 @@ String buildPayload() {
     p += "]";
   }
 
-  if (tempCount) {
+  if (tempCount > t.tempSent) {
     p += ",\"temperature\":[";
-    for (size_t i = 0; i < tempCount; i++) {
+    for (size_t i = t.tempSent; i < tempCount; i++) {
       const TempSample& s = tempBuf[(tempHead + i) % TEMP_BUFFER];
-      if (i) p += ',';
+      if (i > t.tempSent) p += ',';
       p += "{\"object_temp_c\":";  appendNumber(p, s.object, 2);
       p += ",\"ambient_temp_c\":"; appendNumber(p, s.ambient, 2);
       p += ",\"is_screening\":";   p += s.screening ? "true" : "false";
@@ -835,7 +954,7 @@ void adoptDirectives(const String& body) {
   changed |= adoptMillis(body, "door_open_time_ms", doorOpenTime, 500, 60000);
 
   if (changed) {
-    configDirty = true;   // report the values now in force on the next sync
+    for (auto& t : targets) t.configDirty = true;   // report the values now in force on the next sync
     Serial.print(">> Adopted server settings: threshold ");
     Serial.print(feverThresholdC, 1);
     Serial.print("C, range ");
@@ -873,11 +992,12 @@ void wifiEnsure(unsigned long now) {
 
       // Reconnected somewhere else: an address from the old network is worse
       // than none, because something there may well answer on port 80.
-      if (serverHost.length() && serverNet != subnetKey()) {
-        Serial.println(">> Different network than the server was found on. Searching again.");
-        serverHost = "";
-        scanOctet = 1;
-        discPhase = DISC_REMEMBERED;
+      SyncTarget& L = targets[TARGET_LOCAL];
+      if (L.enabled && L.serverHost.length() && L.serverNet != subnetKey()) {
+        Serial.println(">> Different network than the local server was found on. Searching again.");
+        L.serverHost = "";
+        L.scanOctet = 1;
+        L.discPhase = DISC_REMEMBERED;
       }
     }
     return;
@@ -906,13 +1026,13 @@ uint32_t subnetKey() {
   return ((uint32_t) WiFi.localIP()) & ((uint32_t) WiFi.subnetMask());
 }
 
-String serverBase() {
-  if (usingFixedServer()) {
+String serverBase(const SyncTarget& t) {
+  if (t.fixedUrl) {
     String base = SERVER_URL;
     while (base.endsWith("/")) base.remove(base.length() - 1);   // tolerate a trailing slash
     return base;
   }
-  return "http://" + serverHost + ":" + String(SERVER_PORT) + String(SERVER_PATH);
+  return "http://" + t.serverHost + ":" + String(SERVER_PORT) + String(SERVER_PATH);
 }
 
 /**
@@ -936,17 +1056,17 @@ bool probeServer(const String& host, uint16_t connectMs, uint16_t readMs) {
   return body.indexOf("\"disinfentry\":true") >= 0;
 }
 
-bool adoptServer(const String& host, const char* how) {
-  serverHost = host;
-  serverNet  = subnetKey();
-  connFailures = 0;
-  discPhase = DISC_REMEMBERED;
+bool adoptServer(SyncTarget& t, const String& host, const char* how) {
+  t.serverHost = host;
+  t.serverNet  = subnetKey();
+  t.connFailures = 0;
+  t.discPhase = DISC_REMEMBERED;
 
   // Only write when it actually changed. A server that flaps would otherwise
   // rewrite the same two keys every time it came back, for no reason.
-  if (prefs.getString("host", "") != host || prefs.getUInt("net", 0) != serverNet) {
+  if (prefs.getString("host", "") != host || prefs.getUInt("net", 0) != t.serverNet) {
     prefs.putString("host", host);
-    prefs.putUInt("net", serverNet);
+    prefs.putUInt("net", t.serverNet);
   }
 
   Serial.print(">> Server found at ");
@@ -965,17 +1085,17 @@ bool adoptServer(const String& host, const char* how) {
  * working address and forced a 254-address sweep to rediscover the same server.
  * Every pass now re-probes it first, patiently, until something better turns up.
  */
-void forgetServer() {
-  if (usingFixedServer()) return;   // a fixed address is never "lost", only retried
-  if (serverHost.length() == 0 || SERVER_PIN_IP[0] != '\0') return;
+void forgetServer(SyncTarget& t) {
+  if (t.fixedUrl) return;   // a fixed address is never "lost", only retried
+  if (t.serverHost.length() == 0 || SERVER_PIN_IP[0] != '\0') return;
 
   Serial.print("!! Server stopped answering at ");
-  Serial.print(serverHost);
+  Serial.print(t.serverHost);
   Serial.println(". Will retry that address first, then search.");
 
-  serverHost = "";
-  scanOctet = 1;
-  discPhase = DISC_REMEMBERED;
+  t.serverHost = "";
+  t.scanOctet = 1;
+  t.discPhase = DISC_REMEMBERED;
 }
 
 /**
@@ -985,21 +1105,21 @@ void forgetServer() {
  * DISCOVERY_BUDGET_MS, so a pass cannot block longer than that plus the probe
  * already in flight - whatever the network looks like.
  */
-bool resolveServer() {
-  if (usingFixedServer()) return true;   // nothing to search for
-  if (serverHost.length()) return true;
+bool resolveServer(SyncTarget& t) {
+  if (t.fixedUrl) return true;   // nothing to search for
+  if (t.serverHost.length()) return true;
 
   if (SERVER_PIN_IP[0] != '\0') {
-    serverHost = SERVER_PIN_IP;
-    serverNet  = subnetKey();
+    t.serverHost = SERVER_PIN_IP;
+    t.serverNet  = subnetKey();
     return true;
   }
 
   unsigned long began = millis();
 
   /* ---- Phase 1: whatever worked last time ---- */
-  if (discPhase == DISC_REMEMBERED) {
-    discPhase = DISC_MDNS;   // one attempt, whatever the outcome
+  if (t.discPhase == DISC_REMEMBERED) {
+    t.discPhase = DISC_MDNS;   // one attempt, whatever the outcome
 
     // Only on the network it was found on: an address that means "the server"
     // here can easily mean a printer somewhere else.
@@ -1008,21 +1128,21 @@ bool resolveServer() {
       // Patient timeouts: this address has answered before, so give it time to
       // answer again rather than writing it off at the sweep's pace.
       if (probeServer(saved, TARGET_CONNECT_MS, TARGET_READ_MS)) {
-        return adoptServer(saved, "remembered");
+        return adoptServer(t, saved, "remembered");
       }
     }
     return false;
   }
 
   /* ---- Phase 2: mDNS, which survives the address changing ---- */
-  if (discPhase == DISC_MDNS) {
-    discPhase = DISC_SWEEP;
+  if (t.discPhase == DISC_MDNS) {
+    t.discPhase = DISC_SWEEP;
 
     if (mdnsStarted) {
       IPAddress found = MDNS.queryHost(SERVER_HOSTNAME, MDNS_QUERY_MS);
       if (((uint32_t) found) != 0
           && probeServer(found.toString(), TARGET_CONNECT_MS, TARGET_READ_MS)) {
-        return adoptServer(found.toString(), "mDNS");
+        return adoptServer(t, found.toString(), "mDNS");
       }
     }
     return false;
@@ -1038,22 +1158,22 @@ bool resolveServer() {
 
   IPAddress self = WiFi.localIP();
   while (millis() - began < DISCOVERY_BUDGET_MS) {
-    if (scanOctet < 1 || scanOctet > 254) {
+    if (t.scanOctet < 1 || t.scanOctet > 254) {
       // A whole lap with nothing found. Start the cycle over at the remembered
       // address - a sweep can miss a host that was simply slow to answer, and
       // re-probing the known-good address patiently is cheaper than another lap.
-      scanOctet = 1;
-      discPhase = DISC_REMEMBERED;
+      t.scanOctet = 1;
+      t.discPhase = DISC_REMEMBERED;
       Serial.println("!! Swept the subnet without finding the server. Retrying the known address.");
       return false;
     }
 
-    uint8_t target = (uint8_t) scanOctet++;
+    uint8_t target = (uint8_t) t.scanOctet++;
     if (target == self[3]) continue;   // that one is us
 
     IPAddress candidate(self[0], self[1], self[2], target);
     if (probeServer(candidate.toString(), PROBE_CONNECT_MS, PROBE_READ_MS)) {
-      return adoptServer(candidate.toString(), "subnet sweep");
+      return adoptServer(t, candidate.toString(), "subnet sweep");
     }
   }
 
@@ -1061,21 +1181,21 @@ bool resolveServer() {
   Serial.print(self[0]); Serial.print('.');
   Serial.print(self[1]); Serial.print('.');
   Serial.print(self[2]); Serial.print(".x, reached .");
-  Serial.print(scanOctet);
+  Serial.print(t.scanOctet);
   Serial.println(")");
   return false;
 }
 
-bool syncDue(unsigned long now) {
+bool syncDue(const SyncTarget& t, unsigned long now) {
   // Back off after failures: 3 s, 6 s, 12 s ... capped at MAX_SYNC_GAP.
   unsigned long gap = MIN_SYNC_GAP;
-  for (uint8_t i = 0; i < syncFailStreak && gap < MAX_SYNC_GAP; i++) gap *= 2;
+  for (uint8_t i = 0; i < t.syncFailStreak && gap < MAX_SYNC_GAP; i++) gap *= 2;
   if (gap > MAX_SYNC_GAP) gap = MAX_SYNC_GAP;
-  if (now - lastSyncAttempt < gap) return false;
-  if (lastSyncOk == 0) return true;   // never synced: register as soon as WiFi is up
-  if (pendingCycleCount > 0 || pendingExitCount > 0) return true;
-  if (distCount >= DISTANCE_BUFFER / 2 || tempCount >= TEMP_BUFFER / 2) return true;
-  return (now - lastSyncOk) >= HEARTBEAT_INTERVAL;
+  if (now - t.lastSyncAttempt < gap) return false;
+  if (t.lastSyncOk == 0) return true;   // never synced: register as soon as WiFi is up
+  if (pendingCycleCount > t.cycSent || pendingExitCount > t.exitSent) return true;
+  if (distCount - t.distSent >= DISTANCE_BUFFER / 2 || tempCount - t.tempSent >= TEMP_BUFFER / 2) return true;
+  return (now - t.lastSyncOk) >= HEARTBEAT_INTERVAL;
 }
 
 /**
@@ -1085,20 +1205,20 @@ bool syncDue(unsigned long now) {
  * On success the queues are cleared. On failure they are kept and resent: the
  * server keys every row, so a duplicate batch updates rather than doubles up.
  */
-bool syncNow() {
+bool syncNow(SyncTarget& t) {
   if (WiFi.status() != WL_CONNECTED) return false;
 
   // Nothing is sent until the server has been located. The queues are keyed and
   // bounded, so waiting here costs a delay, never a record.
-  if (!resolveServer()) return false;
+  if (!resolveServer(t)) return false;
 
-  String url = serverBase() + "/api/booth_sync.php";
-  String payload = buildPayload();
+  String url = serverBase(t) + "/api/booth_sync.php";
+  String payload = buildPayload(t);
 
   // The TLS client must outlive the request, so it lives here, next to the HTTPClient.
   WiFiClientSecure secureClient;
   HTTPClient http;
-  const bool tls = usingFixedServer() && serverIsHttps();
+  const bool tls = t.fixedUrl && serverIsHttps();
   bool started;
   if (tls) {
     configureTls(secureClient);
@@ -1107,10 +1227,10 @@ bool syncNow() {
     started = http.begin(url);
   }
   if (!started) {
-    Serial.println(usingFixedServer()
+    Serial.println(t.fixedUrl
       ? "!! Sync failed: could not build a URL for the server. Check SERVER_URL_VALUE in secrets.h."
       : "!! Sync failed: could not build a URL for the server. Check SERVER_PATH.");
-    if (syncFailStreak < 8) syncFailStreak++;
+    if (t.syncFailStreak < 8) t.syncFailStreak++;
     return false;
   }
 
@@ -1118,7 +1238,7 @@ bool syncNow() {
   http.setConnectTimeout(timeoutMs);
   http.setTimeout(timeoutMs);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-API-Key", API_KEY);
+  http.addHeader("X-API-Key", t.apiKey);
 
   int code = http.POST(payload);
   bool ok = (code == 200 || code == 201);
@@ -1126,28 +1246,34 @@ bool syncNow() {
   http.end();
 
   if (!ok) {
-    Serial.print("!! Sync failed (HTTP ");
+    Serial.print("!! Sync to the ");
+    Serial.print(t.label);
+    Serial.print(" failed (HTTP ");
     Serial.print(code);
     Serial.print(") at ");
-    Serial.print(usingFixedServer() ? String(SERVER_URL) : serverHost);
+    Serial.print(t.fixedUrl ? String(SERVER_URL) : t.serverHost);
     Serial.println(". Queued for retry.");
-    if (syncFailStreak < 8) syncFailStreak++;
+    if (t.syncFailStreak < 8) t.syncFailStreak++;
 
     // A negative code is a connection failure, not a rejection: the server did
     // not answer at all, so the address may have moved. A positive code came
     // from a server that is there and simply unhappy - keep the address and let
     // the retry sort it out.
-    if (code < 0 && ++connFailures >= LOST_AFTER_FAILS) forgetServer();
+    if (code < 0 && ++t.connFailures >= LOST_AFTER_FAILS) forgetServer(t);
     return false;
   }
 
-  connFailures = 0;
-  syncFailStreak = 0;
+  t.connFailures = 0;
+  t.syncFailStreak = 0;
 
-  Serial.print(">> Synced ");
-  Serial.print(pendingCycleCount);
+  Serial.print(">> Synced to the ");
+  Serial.print(t.label);
+  Serial.print(": ");
+  Serial.print(pendingCycleCount - t.cycSent);
   Serial.print(" cycle(s), ");
-  Serial.print(distCount + tempCount);
+  Serial.print(pendingExitCount - t.exitSent);
+  Serial.print(" exit(s), ");
+  Serial.print((distCount - t.distSent) + (tempCount - t.tempSent));
   Serial.print(" reading(s).");
   if (droppedSamples || droppedCycles) {
     // Only ever non-zero after a long outage; worth seeing in the log.
@@ -1159,16 +1285,20 @@ bool syncNow() {
   }
   Serial.println();
 
-  for (size_t i = 0; i < pendingCycleCount; i++) pendingCycles[i] = String();
-  pendingCycleCount = 0;
-  pendingExitCount = 0;
-  distHead = distCount = 0;
-  tempHead = tempCount = 0;
-  bootReported = true;
-  configDirty = false;
-  lastSyncOk = millis();
+  // This target now has everything queued so far; whatever every enabled target has is freed.
+  t.cycSent  = pendingCycleCount;
+  t.exitSent = pendingExitCount;
+  t.distSent = distCount;
+  t.tempSent = tempCount;
+  compactQueues();
 
-  adoptDirectives(body);
+  t.bootReported = true;
+  t.configDirty = false;
+  t.lastSyncOk = millis();
+
+  // Settings come from one server only, or two servers with different values would flip the
+  // booth back and forth on every sync.
+  if (isPrimary(t)) adoptDirectives(body);
   return true;
 }
 
@@ -1225,6 +1355,7 @@ void finishCycle(unsigned long now, const char* outcome, const char* remarks) {
     for (size_t i = 1; i < MAX_PENDING_CYCLES; i++) pendingCycles[i - 1] = pendingCycles[i];
     pendingCycleCount--;
     droppedCycles++;
+    for (auto& t : targets) if (t.cycSent > 0) t.cycSent--;
     Serial.println("!! Cycle queue full - dropped the oldest unsent cycle.");
   }
 
@@ -1261,6 +1392,7 @@ void setup() {
 
   // Namespace in NVS holding the last server address that answered.
   prefs.begin("disinfentry", false);
+  initTargets();
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
@@ -1295,21 +1427,26 @@ void setup() {
 
   Serial.print("Smart Disinfectant ready. Boot ");
   Serial.println(bootId);
-  if (usingFixedServer()) {
-    Serial.print("Server: ");
+  if (targets[TARGET_REMOTE].enabled) {
+    Serial.print("Hosted server: ");
     Serial.print(SERVER_URL);
     Serial.println(serverIsHttps() ? " (fixed address, TLS)" : " (fixed address)");
-  } else if (SERVER_PIN_IP[0] != '\0') {
-    Serial.print("Server pinned to ");
-    Serial.println(SERVER_PIN_IP);
-  } else {
-    String saved = prefs.getString("host", "");
-    Serial.print("Server: ");
-    Serial.print(saved.length() ? saved : String("not known yet"));
-    Serial.print(" (will confirm, then try mDNS name '");
-    Serial.print(SERVER_HOSTNAME);
-    Serial.println("', then sweep the subnet)");
   }
+  if (targets[TARGET_LOCAL].enabled) {
+    if (SERVER_PIN_IP[0] != '\0') {
+      Serial.print("Local server pinned to ");
+      Serial.println(SERVER_PIN_IP);
+    } else {
+      String saved = prefs.getString("host", "");
+      Serial.print("Local server: ");
+      Serial.print(saved.length() ? saved : String("not known yet"));
+      Serial.print(" (will confirm, then try mDNS name '");
+      Serial.print(SERVER_HOSTNAME);
+      Serial.println("', then sweep the subnet)");
+    }
+  }
+  Serial.print("Settings are taken from the ");
+  Serial.println(targets[TARGET_REMOTE].enabled ? "hosted server." : "local server.");
   Serial.print("Waiting for object within ");
   Serial.print(detectionDistanceCm, 0);
   Serial.print("cm (entry) / ");
@@ -1356,16 +1493,26 @@ void loop() {
   // Only while idle AND with nobody in range that a sensor would act on: a POST blocks
   // for up to the HTTP(S) timeout, which must never land inside a spray burst or a door
   // hold, nor keep someone waiting to get out. Failed syncs back off (see syncDue).
-  if (currentState == IDLE && !sensorMayAct() && syncDue(now)) {
-    lastSyncAttempt = now;
-    syncNow();
+  // One target per pass, round-robin: each sync blocks, so two back to back could keep the
+  // booth deaf for twice as long as either alone.
+  if (currentState == IDLE && !sensorMayAct()) {
+    for (uint8_t k = 0; k < TARGET_COUNT; k++) {
+      uint8_t idx = (nextTarget + k) % TARGET_COUNT;
+      SyncTarget& t = targets[idx];
+      if (!t.enabled || !syncDue(t, now)) continue;
 
-    // The POST consumed real time. Re-read the clock and rebase the sampling
-    // timers so they do not all fire at once on the next pass.
-    now = millis();
-    lastSampleTime = now;
-    lastPrintTime = now;
-    lastTempPrint = now;
+      nextTarget = (idx + 1) % TARGET_COUNT;
+      t.lastSyncAttempt = now;
+      syncNow(t);
+
+      // The POST consumed real time. Re-read the clock and rebase the sampling
+      // timers so they do not all fire at once on the next pass.
+      now = millis();
+      lastSampleTime = now;
+      lastPrintTime = now;
+      lastTempPrint = now;
+      break;
+    }
   }
 
   // ---- Thermometer recovery ----
@@ -1376,7 +1523,7 @@ void loop() {
     lastMlxRetry = now;
     if (mlxTryBegin()) {
       mlxOk = true;
-      bootReported = false;   // resend the boot section so the console clears the fault
+      for (auto& t : targets) t.bootReported = false;   // resend the boot section so the console clears the fault
       Serial.println(">> MLX90614 is answering again. Screening restored.");
     }
   }

@@ -17,3 +17,11 @@ const char* API_KEY         = "paste-the-key-from-system-settings";
 // your address: https, no trailing slash, no project folder. The booth then talks to it
 // over TLS and does not search the local network.
 // #define SERVER_URL_VALUE "https://your-app.up.railway.app"
+
+// --- Report to the local XAMPP server TOO ---
+// With the hosted address above set, uncomment this to ALSO send everything to the local
+// XAMPP server (found by SERVER_HOSTNAME). Each server has its own retry queue, so one being
+// down never loses data for the other. Settings (threshold, spray times) come from the
+// hosted server. If the local server uses a different API key, define it too:
+// #define ALSO_LOCAL_SERVER
+// #define LOCAL_API_KEY_VALUE "the-local-servers-key"
