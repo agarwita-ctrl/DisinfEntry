@@ -1253,6 +1253,15 @@ bool syncNow(SyncTarget& t) {
     Serial.print(") at ");
     Serial.print(t.fixedUrl ? String(SERVER_URL) : t.serverHost);
     Serial.println(". Queued for retry.");
+    if (code == 401) {
+      // The server is there and answering - it just does not accept this booth's key. By far the
+      // commonest cause is the wrong key in secrets.h for THIS server, so say which one.
+      Serial.print("   The ");
+      Serial.print(t.label);
+      Serial.println(" rejected the API key. It must match System Settings -> Booth API Access on that");
+      Serial.println(t.fixedUrl ? "   server: set API_KEY in secrets.h, then upload again."
+                                : "   server: set LOCAL_API_KEY_VALUE (or API_KEY, if both servers share one) in secrets.h, then upload again.");
+    }
     if (t.syncFailStreak < 8) t.syncFailStreak++;
 
     // A negative code is a connection failure, not a rejection: the server did
