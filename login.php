@@ -111,7 +111,7 @@ $farmName = setting('farm_name', 'Poultry Farm');
       <div class="auth-feature">
         <i class="bi bi-droplet"></i>
         <div><strong>Automatic misting</strong><br>
-          <span class="text-white-50 small">PIR and ultrasonic triggered disinfection on every entry.</span></div>
+          <span class="text-white-50 small">Ultrasonic triggered disinfection on every entry.</span></div>
       </div>
       <div class="auth-feature">
         <i class="bi bi-graph-up-arrow"></i>
