@@ -361,6 +361,7 @@ struct SyncTarget {
   DiscoveryPhase discPhase = DISC_REMEMBERED;
   uint16_t       scanOctet = 1;          // sweep position, so a pass resumes where it stopped
   uint8_t        connFailures = 0;
+  bool           wentOffline = false;    // already announced "going offline mode"
 };
 
 SyncTarget targets[TARGET_COUNT];
@@ -1234,7 +1235,13 @@ bool syncNow(SyncTarget& t) {
     return false;
   }
 
-  const uint16_t timeoutMs = tls ? HTTPS_TIMEOUT_MS : HTTP_TIMEOUT_MS;
+  // While this server is unreachable, a full-length wait would freeze the booth (and the
+  // Serial Monitor) for seconds on every retry. After a failure use the short timeout, and
+  // give the long one a chance only on every third retry so a slow but reachable server
+  // can still get through.
+  const bool probing = (t.syncFailStreak > 0) && (t.syncFailStreak % 3 != 0);
+  const uint16_t timeoutMs = probing ? HTTP_TIMEOUT_MS
+                                     : (tls ? HTTPS_TIMEOUT_MS : HTTP_TIMEOUT_MS);
   http.setConnectTimeout(timeoutMs);
   http.setTimeout(timeoutMs);
   http.addHeader("Content-Type", "application/json");
@@ -1463,10 +1470,39 @@ void setup() {
   Serial.println("cm (exit)...");
 }
 
+/**
+ * Offline-mode indicator. Sensing, screening, spray and door never wait for a network, so
+ * this only REPORTS the link state on the Serial Monitor - "the sensors are fine, the
+ * server is just unreachable" becomes visible at a glance. One state per target.
+ */
+void printLinkStatus(unsigned long now) {
+  static unsigned long lastStatus = 0;
+  if (now - lastStatus < 10000UL) return;
+  lastStatus = now;
+
+  Serial.print("[");
+  Serial.print(now / 1000.0, 1);
+  Serial.print("s] ");
+  Serial.print(mlxOk ? "Sensors OK" : "THERMOMETER FAULT");
+  for (auto& t : targets) {
+    if (!t.enabled) continue;
+    Serial.print(" | ");
+    Serial.print(t.label);
+    Serial.print(": ");
+    if (WiFi.status() != WL_CONNECTED)              Serial.print("OFFLINE (no WiFi)");
+    else if (t.lastSyncOk == 0 || t.syncFailStreak) Serial.print("OFFLINE (unreachable)");
+    else                                            Serial.print("ONLINE");
+  }
+  Serial.print(" | queued: ");
+  Serial.print((unsigned) pendingCycleCount);
+  Serial.println(" cycle(s) - sensors keep running locally");
+}
+
 void loop() {
   unsigned long now = millis();
 
   wifiEnsure(now);
+  printLinkStatus(now);
 
   // ---- Distance sampling ----
   // One sensor per pass, alternating, so neither hears the other's ping.
@@ -1490,9 +1526,9 @@ void loop() {
 
       Serial.print("[");
       Serial.print(now / 1000.0, 1);
-      Serial.print("s] Entry: ");
+      Serial.print("s] Sensor 1 (entry): ");
       printDistance(lastDistance);
-      Serial.print(" | Exit: ");
+      Serial.print(" | Sensor 2 (exit): ");
       printDistance(lastExitDistance);
       Serial.println();
     }
@@ -1512,14 +1548,36 @@ void loop() {
 
       nextTarget = (idx + 1) % TARGET_COUNT;
       t.lastSyncAttempt = now;
-      syncNow(t);
+
+      // Plain-language link messages for the Serial Monitor (the sensors never wait on this).
+      const bool firstTry = (t.lastSyncOk == 0 && t.syncFailStreak == 0 && !t.wentOffline);
+      if (firstTry)             { Serial.print(">> Connecting to the "); Serial.print(t.label); Serial.println("..."); }
+      else if (t.wentOffline)   { Serial.print(">> Retrying to reconnect to the "); Serial.print(t.label); Serial.println("..."); }
+
+      bool linked = syncNow(t);
+
+      if (linked) {
+        if (t.wentOffline) { Serial.print(">> Reconnected to the "); Serial.print(t.label); Serial.println(". Back online."); }
+        t.wentOffline = false;
+      } else if (!t.wentOffline) {
+        t.wentOffline = true;
+        Serial.print(">> Server not found (");
+        Serial.print(t.label);
+        Serial.println("), going offline mode. Sensors keep running.");
+      } else {
+        Serial.print(">> No server found (");
+        Serial.print(t.label);
+        Serial.println("). Still offline.");
+      }
 
       // The POST consumed real time. Re-read the clock and rebase the sampling
       // timers so they do not all fire at once on the next pass.
       now = millis();
       lastSampleTime = now;
-      lastPrintTime = now;
-      lastTempPrint = now;
+      // Print the next readings straight away instead of waiting another full interval,
+      // so a slow or failed sync never leaves a gap in the Serial Monitor.
+      lastPrintTime = now - PRINT_INTERVAL;
+      lastTempPrint = now - TEMP_PRINT_INTERVAL;
       break;
     }
   }
@@ -1546,9 +1604,9 @@ void loop() {
 
     Serial.print("[");
     Serial.print(now / 1000.0, 1);
-    Serial.print("s] Object Temp: ");
+    Serial.print("s] Temperature: ");
     Serial.print(objTemp);
-    Serial.print(" C | Ambient Temp: ");
+    Serial.print(" C | Ambient: ");
     Serial.print(ambTemp);
     Serial.println(" C");
   }
@@ -1644,7 +1702,7 @@ void loop() {
             setState(ACCESS_DENIED, now);
           } else {
             screeningFailed = false;
-            Serial.println(">> Temperature normal. Starting pump sequence.");
+            Serial.println(">> Temperature normal. Condition met - opening pump.");
             setRelay(true);
             pumpBurstStart[0] = (uint32_t) now;
             stateStartTime = now;
@@ -1738,7 +1796,7 @@ void loop() {
 
     case DOOR_CLOSING:
       if (now - stateStartTime >= 500) {
-        Serial.println("Cycle complete. Returning to idle.\n");
+        Serial.println("Done. Cycle complete, returning to idle.\n");
         setState(IDLE, now);
         // The person just walked through to the exit side. Without this the exit
         // sensor would see them standing there and open the door straight back up.
