@@ -205,7 +205,7 @@ CREATE TABLE `entries` (
 -- ----------------------------------------------------
 CREATE TABLE `notifications` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-  `type` enum('high_temperature','denied_entry','device_offline','low_disinfectant','system') NOT NULL,
+  `type` enum('high_temperature','denied_entry','device_offline','low_disinfectant','system','disinfection_incomplete','pump_malfunction') NOT NULL,
   `severity` enum('info','warning','danger') NOT NULL DEFAULT 'info',
   `title` varchar(120) NOT NULL,
   `message` varchar(255) NOT NULL,
@@ -341,6 +341,7 @@ INSERT INTO `settings` (`setting_key`,`setting_value`) VALUES
   ('logo',                  ''),
   ('device_offline_after',  '60'),
   ('low_disinfectant_at',   '20'),
+  ('pump_fault_streak',     '3'),
   ('api_key',               'DISINF-ESP32-2024-CHANGE-ME'),
   -- The sequence the booth adopts over the air, in the sketch's own units.
   -- The fever threshold is not repeated here: it is temperature_threshold above.

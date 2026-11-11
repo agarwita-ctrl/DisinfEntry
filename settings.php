@@ -224,6 +224,16 @@ require __DIR__ . '/includes/header.php';
               </div>
               <div class="form-text">Distance and temperature streams. Entries are never pruned.</div>
             </div>
+
+            <div class="col-sm-6">
+              <label class="form-label" for="pump_fault_streak">Pump Fault Streak</label>
+              <div class="input-group">
+                <input type="number" class="form-control" id="pump_fault_streak" name="pump_fault_streak"
+                       value="<?= e($s['pump_fault_streak'] ?? '3') ?>" step="1" min="1" max="10" required>
+                <span class="input-group-text">cycles</span>
+              </div>
+              <div class="form-text">Granted cycles in a row with fewer than two bursts before a possible pump fault is raised.</div>
+            </div>
           </div>
 
           <div class="alert alert-light border small mt-3 mb-0">

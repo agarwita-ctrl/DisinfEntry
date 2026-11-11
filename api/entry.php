@@ -171,6 +171,21 @@ $stmt->execute([
 ]);
 
 /* ---- Notifications ---- */
+
+// Compliance: let in without a completed disinfection. A denied entry is not a breach (the
+// pump is blocked on a denial), and 'skipped' is always denied above, so in practice only
+// a granted 'incomplete' reaches this. Raised per entry, like api/booth_sync.php does.
+if ($accessStatus === 'granted' && $disinfection !== 'completed') {
+    notify(
+        'disinfection_incomplete',
+        'Disinfection Not Completed',
+        sprintf('Booth %s granted entry to %s at %s with disinfection %s.',
+            $deviceId ?: 'ESP32-BOOTH-01', $personName, $now->format('H:i:s'), $disinfection),
+        'danger',
+        $entryId
+    );
+}
+
 if ($isHighTemp) {
     notify(
         'high_temperature',

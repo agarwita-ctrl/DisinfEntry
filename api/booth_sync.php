@@ -322,6 +322,37 @@ $updateEntry = $pdo->prepare(
 
 $linkEntry = $pdo->prepare('UPDATE booth_cycles SET entry_id = ? WHERE id = ?');
 
+/*
+ * Possible pump malfunction - inferred, never measured.
+ *
+ * The booth has no flow sensor, tank float or current sensor, so a failing pump can only
+ * be guessed from what it reports: too few spray bursts, bursts much shorter than
+ * configured, or several short cycles in a row. Real detection needs hardware (a flow
+ * sensor or a tank float). `devices.disinfectant_level` is the existing column for a
+ * tank level once a booth reports one; booth_sync already stores it and raises the
+ * low-disinfectant alert from it.
+ */
+const REQUIRED_BURSTS     = 2;     // a complete disinfection is two spray bursts
+const SHORT_BURST_RATIO   = 0.5;   // a burst under half the configured length is suspect
+
+$pumpFaultStreak = max(1, min(10, (int) setting('pump_fault_streak', '3')));
+
+// The burst length in force: what the booth last reported, else the directive it is sent.
+$stmt = $pdo->prepare('SELECT pump_on_time_ms FROM booth_config WHERE device_id = ? LIMIT 1');
+$stmt->execute([$deviceId]);
+$pumpOnMs = (int) ($stmt->fetchColumn() ?: 0);
+if ($pumpOnMs <= 0) {
+    $pumpOnMs = (int) (booth_directives()['pump_on_time_ms'] ?? 0);
+}
+
+// The newest granted cycles for this booth, newest first, to look for a streak.
+$recentGranted = $pdo->prepare(
+    'SELECT pump_bursts FROM booth_cycles
+      WHERE device_id = ? AND outcome = "granted"
+      ORDER BY detected_at DESC, id DESC
+      LIMIT ' . $pumpFaultStreak   // interpolated: an int clamped to 1-10 above
+);
+
 $clearStates = $pdo->prepare('DELETE FROM booth_cycle_states WHERE cycle_id = ?');
 $clearBursts = $pdo->prepare('DELETE FROM booth_pump_bursts WHERE cycle_id = ?');
 $clearDoor   = $pdo->prepare('DELETE FROM booth_door_actions WHERE cycle_id = ?');
@@ -428,14 +459,59 @@ foreach ($cycles as $c) {
     }
 
     /* ---- Spray bursts ---- */
-    $seenBursts = [];
+    $seenBursts  = [];
+    $shortBursts = [];   // [burst_no => duration_ms] of bursts under half the configured length
     foreach ((is_array($c['pump'] ?? null) ? $c['pump'] : []) as $b) {
         $no = is_array($b) ? $int($b, 'burst_no') : null;
         if ($no === null || $no < 1 || isset($seenBursts[$no])) {
             continue;
         }
         $seenBursts[$no] = true;
-        $insertBurst->execute([$cycleId, $no, max(0, $int($b, 'duration_ms') ?? 0)]);
+        $burstMs = max(0, $int($b, 'duration_ms') ?? 0);
+        $insertBurst->execute([$cycleId, $no, $burstMs]);
+
+        if ($pumpOnMs > 0 && $burstMs < $pumpOnMs * SHORT_BURST_RATIO) {
+            $shortBursts[$no] = $burstMs;
+        }
+    }
+
+    /* ---- Possible pump malfunction (newly stored cycles only, never a retry) ---- */
+    if ($isNew) {
+        $faults = [];
+
+        // (a) a granted cycle where the sequence did not reach two bursts
+        if ($outcome === 'granted' && $pumpBursts < REQUIRED_BURSTS) {
+            $faults[] = sprintf('only %d of %d spray bursts ran', $pumpBursts, REQUIRED_BURSTS);
+        }
+
+        // (b) a burst far shorter than the configured burst length
+        if ($shortBursts) {
+            $faults[] = sprintf(
+                'burst %d lasted %d ms against %d ms configured',
+                array_key_first($shortBursts), reset($shortBursts), $pumpOnMs
+            );
+        }
+
+        // (c) N granted cycles in a row, this one included, each with fewer than two bursts
+        if ($outcome === 'granted' && $pumpBursts < REQUIRED_BURSTS) {
+            $recentGranted->execute([$deviceId]);
+            $last = $recentGranted->fetchAll(PDO::FETCH_COLUMN);
+            if (count($last) === $pumpFaultStreak
+                && count(array_filter($last, static fn($n): bool => (int) $n < REQUIRED_BURSTS)) === $pumpFaultStreak) {
+                $faults[] = sprintf('%d granted cycles in a row had fewer than %d bursts', $pumpFaultStreak, REQUIRED_BURSTS);
+            }
+        }
+
+        if ($faults) {
+            $pendingNotices[] = [
+                'pump_malfunction',
+                'Possible Pump Malfunction',
+                sprintf('Booth %s: the pump may be faulty (%s). This is inferred from the booth\'s reports; check the pump and tank.',
+                    $deviceId, implode('; ', $faults)),
+                'danger',
+                null,
+            ];
+        }
     }
 
     /* ---- Door movement ---- */
@@ -525,6 +601,24 @@ foreach ($cycles as $c) {
     $entriesCreated++;
 
     /* ---- Alerts ---- */
+
+    // Compliance: someone was let in without a full spray. Independent of the chain below,
+    // since a granted entry can also be a high or low reading. A DENIED entry never counts:
+    // the pump is deliberately blocked on a denial.
+    // One alert per entry, with no rate limit: each is a distinct person who got through,
+    // and the entry link is the compliance record. A failing pump floods this one list, but
+    // the hourly 'Possible Pump Malfunction' alert is what tells the operator why.
+    if ($access === 'granted' && $disinfection !== 'completed') {
+        $pendingNotices[] = [
+            'disinfection_incomplete',
+            'Disinfection Not Completed',
+            sprintf('Booth %s granted entry at %s with disinfection %s (%d of %d spray bursts).',
+                $deviceId, $entryTime, $disinfection, $pumpBursts, REQUIRED_BURSTS),
+            'danger',
+            $entryId,
+        ];
+    }
+
     if ($temp > $threshold) {
         $pendingNotices[] = [
             'high_temperature',
@@ -698,6 +792,20 @@ foreach ($pendingNotices as $n) {
               WHERE type = "system" AND title = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
         );
         $recent->execute([$n[1]]);
+        if ((int) $recent->fetchColumn() > 0) {
+            continue;
+        }
+    }
+    // Possible pump malfunction: once per hour per booth. Not type 'system', so it needs its
+    // own check, matched on "Booth <id>:" as the message renders it (literal, no wildcards)
+    // so one booth cannot suppress another's alert.
+    if ($n[0] === 'pump_malfunction') {
+        $recent = $pdo->prepare(
+            'SELECT COUNT(*) FROM notifications
+              WHERE type = "pump_malfunction" AND message LIKE ?
+                AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
+        );
+        $recent->execute(['Booth ' . addcslashes($deviceId, '%_\\') . ':%']);
         if ((int) $recent->fetchColumn() > 0) {
             continue;
         }

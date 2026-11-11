@@ -8,6 +8,8 @@
     denied_entry: ['bi-shield-x', 'bg-danger-subtle text-danger', 'Denied Entry'],
     device_offline: ['bi-wifi-off', 'bg-warning-subtle text-warning', 'Booth Offline'],
     low_disinfectant: ['bi-droplet-half', 'bg-warning-subtle text-warning', 'Low Disinfectant'],
+    disinfection_incomplete: ['bi-shield-exclamation', 'bg-danger-subtle text-danger', 'Disinfection Incomplete'],
+    pump_malfunction: ['bi-exclamation-octagon', 'bg-danger-subtle text-danger', 'Pump Malfunction'],
     system: ['bi-info-circle', 'bg-primary-subtle text-primary', 'System'],
   };
 

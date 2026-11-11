@@ -52,6 +52,8 @@ require __DIR__ . '/includes/header.php';
         <option value="denied_entry">Denied Entry</option>
         <option value="device_offline">Booth Offline</option>
         <option value="low_disinfectant">Low Disinfectant</option>
+        <option value="disinfection_incomplete">Disinfection Incomplete</option>
+        <option value="pump_malfunction">Pump Malfunction</option>
         <option value="system">System</option>
       </select>
       <select class="form-select form-select-sm" id="fRead" style="width:auto">

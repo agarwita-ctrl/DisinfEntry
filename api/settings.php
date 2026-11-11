@@ -115,6 +115,12 @@ foreach (BOOTH_DIRECTIVE_RANGES as [$key, $default, $min, $max]) {
         : (string) round((float) $raw, 1);
 }
 
+$streakRaw = (string) ($_POST['pump_fault_streak'] ?? '3');
+if (filter_var($streakRaw, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 10]]) === false) {
+    json_response(['success' => false, 'message' => 'Pump fault streak must be a whole number from 1 to 10.'], 422);
+}
+$booth['pump_fault_streak'] = (string) (int) $streakRaw;
+
 $retention = (int) ($_POST['telemetry_retention_hours'] ?? 24);
 if ($retention < 1 || $retention > 720) {
     json_response(['success' => false, 'message' => 'Telemetry retention must be between 1 and 720 hours.'], 422);
@@ -182,11 +188,16 @@ if ($logoPath !== null) {
     $values['logo'] = $logoPath;
 }
 
+$oldStreak = setting('pump_fault_streak', '3');
+
 foreach ($values as $key => $value) {
     set_setting($key, $value);
 }
 
 audit('Updated system settings', 'System Settings');
+if ($oldStreak !== $values['pump_fault_streak']) {
+    audit(sprintf('Changed the pump fault streak from %s to %s granted cycles', $oldStreak, $values['pump_fault_streak']), 'System Settings');
+}
 
 json_response([
     'success'  => true,

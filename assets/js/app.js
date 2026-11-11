@@ -202,6 +202,8 @@ const App = (() => {
     denied_entry: ['bi-shield-x', 'bg-danger-subtle text-danger'],
     device_offline: ['bi-wifi-off', 'bg-warning-subtle text-warning'],
     low_disinfectant: ['bi-droplet-half', 'bg-warning-subtle text-warning'],
+    disinfection_incomplete: ['bi-shield-exclamation', 'bg-danger-subtle text-danger'],
+    pump_malfunction: ['bi-exclamation-octagon', 'bg-danger-subtle text-danger'],
     system: ['bi-info-circle', 'bg-primary-subtle text-primary'],
   };
 

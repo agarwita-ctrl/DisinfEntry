@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $params = [];
 
     $type = (string) ($_GET['type'] ?? '');
-    if (in_array($type, ['high_temperature', 'denied_entry', 'device_offline', 'low_disinfectant', 'system'], true)) {
+    if (in_array($type, ['high_temperature', 'denied_entry', 'device_offline', 'low_disinfectant', 'system', 'disinfection_incomplete', 'pump_malfunction'], true)) {
         $where .= ' AND type = ?';
         $params[] = $type;
     }
