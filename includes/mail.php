@@ -199,3 +199,42 @@ function send_temp_password(array $user, string $tempPassword, string $reason): 
 
     return send_mail((string) $user['email'], (string) $user['full_name'], $subject, $text, $html);
 }
+
+/**
+ * Mails an administrator that the disinfectant tank is low. Returns null on success, or a
+ * reason string.
+ */
+function send_low_disinfectant_mail(array $user, string $deviceId, int $level): ?string
+{
+    $system = (string) setting('system_name', 'DisinfEntry');
+    $farm   = (string) setting('farm_name', '');
+    $link   = mail_config()['base_url'];
+
+    $subject = sprintf('%s - disinfectant is low (%d%%)', $system, $level);
+    $line    = sprintf('The disinfectant tank on booth %s is down to %d%%.', $deviceId, $level);
+
+    $text = implode("\n", array_filter([
+        'Hello ' . $user['full_name'] . ',',
+        '',
+        $line,
+        'Please refill the disinfectant tank.',
+        '',
+        $system . ($farm !== '' ? ' (' . $farm . ')' : ''),
+        $link !== '' ? 'Sign in: ' . $link . '/login.php' : null,
+        '',
+        'You will get a reminder every few hours until the tank is refilled.',
+    ], static fn($l) => $l !== null));
+
+    $h = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+    $html = '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;max-width:520px">'
+        . '<p>Hello ' . $h($user['full_name']) . ',</p>'
+        . '<p>' . $h($line) . '</p>'
+        . '<p><strong>Please refill the disinfectant tank.</strong></p>'
+        . '<p style="color:#666">' . $h($system) . ($farm !== '' ? ' (' . $h($farm) . ')' : '') . '</p>'
+        . ($link !== '' ? '<p><a href="' . $h($link . '/login.php') . '">Sign in to ' . $h($system) . '</a></p>' : '')
+        . '<p style="color:#888;font-size:13px">You will get a reminder every few hours until the tank is refilled.</p>'
+        . '</div>';
+
+    return send_mail((string) $user['email'], (string) $user['full_name'], $subject, $text, $html);
+}

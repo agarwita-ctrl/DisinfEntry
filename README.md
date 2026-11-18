@@ -143,6 +143,13 @@ level and a booth that cannot read its thermometer. Delivered as a topbar badge,
 a popup for critical alerts, with a full notification centre for filtering, marking read and
 clearing.
 
+**Low disinfectant e-mail.** When the tank level reported by the booth falls to the
+*Low Disinfectant Warning* in System Settings, every active administrator with an e-mail
+address is also e-mailed to refill the tank (when e-mail is configured). It is sent once
+per low episode, then repeated as a reminder every 6 hours while the level stays low; once
+the level recovers above the warning, the next low episode e-mails immediately. A mail
+failure never affects the booth's sync.
+
 ### System Settings (administrator)
 Farm name, system name, logo upload, timezone, temperature threshold, disinfection duration,
 dashboard refresh interval, offline threshold and low-disinfectant warning level. Also shows
@@ -353,9 +360,26 @@ Send it twice: the second call returns `"cycles":0` rather than recording the pe
 | MLX90614 SDA / SCL | 21 / 22 |
 | Misting relay (active LOW) | 26 |
 | Door servo | 25 |
+| Tank level sensor (resistive) S / + | 35 / 33 |
+
+The level sensor's **-** goes to GND. Its **+** is fed from GPIO33 rather than 3V3 so it is
+powered only for the few milliseconds of a reading (a probe left energised in the chemical
+corrodes), and its signal goes to GPIO35, an ADC1 pin that still works while WiFi is on.
 
 > **ECHO needs a divider.** The HC-SR04 drives ECHO at 5 V and ESP32 GPIOs are 3.3 V only.
 > Use a voltage divider (1 kΩ + 2 kΩ) or a level shifter, or the pin can be damaged.
+
+**Tank level calibration.** Flash, open the Serial Monitor at 115200 baud and watch the line
+`Disinfectant tank: NN% (raw XXXX)` (every ~10 s). Note the raw value with the probe out of
+the liquid and enter it as `LEVEL_RAW_EMPTY`; submerge it to the full mark and enter that
+raw value as `LEVEL_RAW_FULL`; reflash. The booth reads only while idle, and reports the
+median of its last five readings, so the percentage settles a few readings after boot.
+A disconnected, shorted or noisy sensor is not read as "empty": the Serial Monitor shows
+`SENSOR FAULT - check the wiring`, and after three such readings in a row the booth stops
+sending a level (the server keeps its last one, so no false refill alert). Keep
+`LEVEL_RAW_EMPTY` above `LEVEL_RAW_FAULT_LOW` (50) so a dry probe is still a valid reading.
+The shipped values are a starting guess, not a calibration. Until firmware 1.5.0 is flashed
+the live monitor shows the level as "not reported".
 
 **Libraries:** ESP32Servo, Adafruit MLX90614. WiFi and HTTPClient ship with the ESP32
 board package; the sketch builds its JSON by hand and needs no JSON library.

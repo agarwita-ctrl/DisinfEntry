@@ -54,6 +54,16 @@
     retry gap doubles (3 s up to 60 s) and the TLS handshake is time-limited, so
     even a dead server leaves the booth responsive.
 
+  Disinfectant tank level: a resistive water level sensor in the tank, read through
+    an ADC1 pin (so it keeps working while WiFi is on) and sent as "disinfectant_level"
+    (0-100 %). The server shows it on the live monitor and, when it falls to the low-level
+    warning in System Settings, notifies the owner in the app and by e-mail to refill.
+    Wiring:  sensor S (signal) -> GPIO35,  sensor + -> GPIO33,  sensor - -> GND.
+    The sensor's + comes from a GPIO, not 3V3, so it is powered only for the few
+    milliseconds of a reading; a resistive probe left energised in the chemical corrodes.
+    It is read only while the booth is IDLE, never during a spray (pump noise, sloshing).
+    Calibrate LEVEL_RAW_EMPTY / LEVEL_RAW_FULL below from the Serial log.
+
   IMPORTANT WIRING NOTE:
   HC-SR04 ECHO pin outputs 5V. ESP32 GPIOs are 3.3V only.
   You MUST use a voltage divider (e.g. 1k + 2k resistors) or a
@@ -142,7 +152,7 @@ const uint16_t SERVER_PORT  = 80;
 
 const char* DEVICE_ID    = "ESP32-BOOTH-01";
 const char* DEVICE_NAME   = "Main Gate Booth";
-const char* FIRMWARE      = "1.4.0";
+const char* FIRMWARE      = "1.5.0";
 
 // ---------- Pin configuration ----------
 const int TRIG_PIN   = 5;    // entry-side sensor (outside, where people get screened)
@@ -157,6 +167,12 @@ const int I2C_SCL    = 22;
 // internal pull-up/down, so the voltage divider is still required (and enough).
 const int TRIG_EXIT_PIN = 27;
 const int ECHO_EXIT_PIN = 34;   // through voltage divider!
+
+// Disinfectant tank level sensor (resistive). GPIO35 is ADC1 and input-only; ADC2 pins
+// cannot be read while WiFi is running. The sensor's + is fed from LEVEL_POWER_PIN and is
+// switched on only while reading, to limit electrode corrosion.
+const int LEVEL_SENSOR_PIN = 35;
+const int LEVEL_POWER_PIN  = 33;
 
 const bool RELAY_ACTIVE_LOW = true;
 
@@ -185,6 +201,32 @@ const float         EXIT_DETECTION_CM = 50.0;
 // Short on purpose - someone leaving should not stand and wait - but long enough
 // that a single stray echo cannot swing the door open.
 const unsigned long EXIT_CONFIRM_TIME = 400;
+
+// ---------- Tank level sensor calibration ----------
+// Raw ADC counts (0-4095) the sensor gives with the probe dry and with the tank full. To
+// measure them, watch the Serial Monitor line "Disinfectant tank: NN% (raw XXXX)": note the
+// raw value with the probe out of the liquid (LEVEL_RAW_EMPTY) and with it submerged to the
+// full mark (LEVEL_RAW_FULL), then enter both here and reflash. A resistive sensor reads
+// HIGHER the wetter it is, so FULL is normally larger than EMPTY; if yours is the other
+// way round, the same formula works with the values swapped. The defaults are a starting
+// guess, not a calibration.
+const int LEVEL_RAW_EMPTY = 300;
+const int LEVEL_RAW_FULL  = 2200;
+const unsigned long LEVEL_READ_INTERVAL  = 5000;   // ms between readings (IDLE only)
+const unsigned long LEVEL_PRINT_INTERVAL = 10000;  // ms between Serial lines
+const int           LEVEL_SAMPLES        = 8;      // ADC reads averaged into one raw value
+const int           LEVEL_SETTLE_MS      = 20;     // after powering the sensor, before reading
+const int           LEVEL_MEDIAN_COUNT   = 5;      // readings kept; the median ignores sloshing
+// A disconnected or broken sensor must not read as "empty" and raise a refill alert. A
+// reading is rejected as a sensor fault when the raw value is outside
+// [LEVEL_RAW_FAULT_LOW, LEVEL_RAW_FAULT_HIGH] (an open wire reads near 0, a short near 4095)
+// or when the samples within one reading disagree by more than LEVEL_MAX_SPREAD (a floating
+// pin is noise). Keep LEVEL_RAW_FAULT_LOW below LEVEL_RAW_EMPTY, which a dry probe legitimately
+// reads. After LEVEL_FAULT_READS faults in a row the level is no longer reported at all.
+const int LEVEL_RAW_FAULT_LOW  = 50;
+const int LEVEL_RAW_FAULT_HIGH = 4050;
+const int LEVEL_MAX_SPREAD     = 400;
+const int LEVEL_FAULT_READS    = 3;
 
 // ---------- Fixed timing (all in milliseconds) ----------
 const unsigned long PRESENCE_GLITCH_GRACE = 500;
@@ -314,6 +356,16 @@ unsigned long exitSeenSince = 0;      // when the exit sensor started seeing som
 bool          exitAwaitClear = false; // exit sensor must read clear before it can trigger
 uint32_t      exitCount = 0;          // serial log only
 bool          exitForcedClose = false;
+
+// ---------- Tank level state ----------
+int           levelPercent = -1;        // -1 = no valid reading yet; never sent to the server
+int           levelHistory[LEVEL_MEDIAN_COUNT];
+int           levelHistoryCount = 0;
+int           levelHistoryNext = 0;
+int           levelFaults = 0;          // consecutive rejected readings
+unsigned long lastLevelRead = 0;
+unsigned long lastLevelPrint = 0;
+bool          levelReadOnce = false;
 
 // ---------- Sync state ----------
 String bootId;                    // new on every reset; scopes every uptime_ms
@@ -825,6 +877,11 @@ String buildPayload(const SyncTarget& t) {
   p += ",\"firmware\":\"" + String(FIRMWARE) + "\"";
   p += ",\"uptime_ms\":" + String(millis());
   p += ",\"state\":\"" + String(stateName(currentState)) + "\"";
+
+  // Omitted - never sent as 0 - until a reading exists: the server keeps its last value.
+  if (levelPercent >= 0) {
+    p += ",\"disinfectant_level\":" + String(levelPercent);
+  }
 
   if (!t.bootReported) {
     p += ",\"boot\":{\"mlx_ok\":";
@@ -1414,6 +1471,10 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
   pinMode(TRIG_EXIT_PIN, OUTPUT);
   pinMode(ECHO_EXIT_PIN, INPUT);
+  pinMode(LEVEL_POWER_PIN, OUTPUT);
+  digitalWrite(LEVEL_POWER_PIN, LOW);            // sensor off until a reading
+  pinMode(LEVEL_SENSOR_PIN, INPUT);
+  analogSetPinAttenuation(LEVEL_SENSOR_PIN, ADC_11db);   // full 0-3.3 V range
   digitalWrite(TRIG_PIN, LOW);
   digitalWrite(TRIG_EXIT_PIN, LOW);
   setRelay(false);   // relay pin was already made an output, OFF, at the top of setup()
@@ -1498,11 +1559,82 @@ void printLinkStatus(unsigned long now) {
   Serial.println(" cycle(s) - sensors keep running locally");
 }
 
+/**
+ * Reads the tank level and keeps the median of the last few readings, so a slosh does not
+ * swing the reported value. Only while IDLE: a spray burst adds electrical noise and sets
+ * the liquid moving. The first reading is taken as soon as the booth is idle after boot.
+ * Reports nothing and blocks for ~LEVEL_SETTLE_MS + a few ms, only when a reading is due.
+ */
+void updateDisinfectantLevel(unsigned long now) {
+  if (currentState != IDLE) return;
+  if (levelReadOnce && now - lastLevelRead < LEVEL_READ_INTERVAL) return;
+  lastLevelRead = now;
+  levelReadOnce = true;
+
+  digitalWrite(LEVEL_POWER_PIN, HIGH);
+  delay(LEVEL_SETTLE_MS);
+  long sum = 0;
+  int lo = 4095, hi = 0;
+  for (int i = 0; i < LEVEL_SAMPLES; i++) {
+    const int v = analogRead(LEVEL_SENSOR_PIN);
+    sum += v;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  digitalWrite(LEVEL_POWER_PIN, LOW);
+  const int raw = (int) (sum / LEVEL_SAMPLES);
+
+  // Not a believable reading (sensor unplugged, shorted or noisy): never turn it into a level.
+  if (raw < LEVEL_RAW_FAULT_LOW || raw > LEVEL_RAW_FAULT_HIGH || hi - lo > LEVEL_MAX_SPREAD) {
+    if (++levelFaults >= LEVEL_FAULT_READS && levelPercent >= 0) {
+      levelPercent = -1;            // stop reporting: the server keeps its last value
+      levelHistoryCount = 0;
+      levelHistoryNext = 0;
+    }
+    if (now - lastLevelPrint >= LEVEL_PRINT_INTERVAL || lastLevelPrint == 0) {
+      lastLevelPrint = now;
+      Serial.print("Disinfectant tank: SENSOR FAULT - check the wiring (raw ");
+      Serial.print(raw);
+      Serial.print(", spread ");
+      Serial.print(hi - lo);
+      Serial.println(")");
+    }
+    return;
+  }
+  levelFaults = 0;
+
+  long pct = (long) (raw - LEVEL_RAW_EMPTY) * 100L / (LEVEL_RAW_FULL - LEVEL_RAW_EMPTY);
+  pct = constrain(pct, 0L, 100L);
+
+  levelHistory[levelHistoryNext] = (int) pct;
+  levelHistoryNext = (levelHistoryNext + 1) % LEVEL_MEDIAN_COUNT;
+  if (levelHistoryCount < LEVEL_MEDIAN_COUNT) levelHistoryCount++;
+
+  int sorted[LEVEL_MEDIAN_COUNT];
+  for (int i = 0; i < levelHistoryCount; i++) sorted[i] = levelHistory[i];
+  for (int i = 1; i < levelHistoryCount; i++) {        // insertion sort, five elements at most
+    int v = sorted[i], j = i - 1;
+    while (j >= 0 && sorted[j] > v) { sorted[j + 1] = sorted[j]; j--; }
+    sorted[j + 1] = v;
+  }
+  levelPercent = sorted[levelHistoryCount / 2];
+
+  if (now - lastLevelPrint >= LEVEL_PRINT_INTERVAL || lastLevelPrint == 0) {
+    lastLevelPrint = now;
+    Serial.print("Disinfectant tank: ");
+    Serial.print(levelPercent);
+    Serial.print("% (raw ");
+    Serial.print(raw);
+    Serial.println(")");
+  }
+}
+
 void loop() {
   unsigned long now = millis();
 
   wifiEnsure(now);
   printLinkStatus(now);
+  updateDisinfectantLevel(now);
 
   // ---- Distance sampling ----
   // One sensor per pass, alternating, so neither hears the other's ping.

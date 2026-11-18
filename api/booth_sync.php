@@ -162,10 +162,8 @@ $stmt->execute([$deviceId]);
 $isNewBoot = ($stmt->fetchColumn() ?: null) !== $bootId;
 
 /**
- * Nothing on the booth measures disinfectant level today - the sketch has a
- * ranger and a thermometer and reports neither. The field is accepted anyway so
- * that adding a tank sensor is a firmware change and not another migration.
- * Absent, the stored value is left alone: NULL stays "not reported".
+ * The booth's tank level sensor (firmware 1.5.0+) sends this as 0-100. Firmware without one
+ * omits it, and the stored value is then left alone: NULL stays "not reported".
  */
 $level = isset($in['disinfectant_level']) && is_numeric($in['disinfectant_level'])
     ? max(0, min(100, (int) $in['disinfectant_level']))
@@ -814,20 +812,11 @@ foreach ($pendingNotices as $n) {
 }
 
 /* ---- Low disinfectant, if this booth reports a level at all ---- */
-if ($level !== null && $level <= (int) setting('low_disinfectant_at', '20')) {
-    // Once per hour, so a booth syncing every 30 s does not bury the operator.
-    $recent = $pdo->prepare(
-        'SELECT COUNT(*) FROM notifications
-          WHERE type = "low_disinfectant" AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
-    );
-    $recent->execute();
-    if ((int) $recent->fetchColumn() === 0) {
-        notify(
-            'low_disinfectant',
-            'Low Disinfectant Level',
-            sprintf('Booth %s is down to %d%% disinfectant. Refill required.', $deviceId, $level),
-            'warning'
-        );
+if ($level !== null) {
+    if ($level <= (int) setting('low_disinfectant_at', '20')) {
+        notify_low_disinfectant($deviceId, $level);   // in-app (1/hour) and e-mail (see functions.php)
+    } else {
+        reset_low_disinfectant_mail();
     }
 }
 

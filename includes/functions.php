@@ -389,6 +389,79 @@ function notify(string $type, string $title, string $message, string $severity =
     ]);
 }
 
+/**
+ * The disinfectant tank is low: raises the in-app notification and e-mails the owner.
+ *
+ * Call it whenever a reported level is at or below low_disinfectant_at; it limits itself.
+ *  - The notification is raised at most once an hour, so a booth syncing every 30 s does
+ *    not bury the operator.
+ *  - The e-mail goes to every active administrator with an address, once per low episode
+ *    and then as a reminder every LOW_DISINFECTANT_REMIND_S while it stays low.
+ *    low_disinfectant_last_mail holds when it was last sent; reset_low_disinfectant_mail()
+ *    clears it when the level recovers, so the next episode e-mails immediately.
+ * A mail problem is logged and ignored: it must never fail the booth's sync.
+ */
+const LOW_DISINFECTANT_REMIND_S = 6 * 3600;
+
+function notify_low_disinfectant(string $deviceId, int $level): void
+{
+    $recent = db()->prepare(
+        'SELECT COUNT(*) FROM notifications
+          WHERE type = "low_disinfectant" AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)'
+    );
+    $recent->execute();
+    if ((int) $recent->fetchColumn() === 0) {
+        notify(
+            'low_disinfectant',
+            'Low Disinfectant Level',
+            sprintf('Booth %s is down to %d%% disinfectant. Refill required.', $deviceId, $level),
+            'warning'
+        );
+    }
+
+    try {
+        require_once __DIR__ . '/mail.php';
+        if (!mail_configured()) {
+            return;
+        }
+
+        $last = (int) setting('low_disinfectant_last_mail', '0');
+        if ($last > 0 && time() - $last < LOW_DISINFECTANT_REMIND_S) {
+            return;
+        }
+
+        $admins = db()->query(
+            "SELECT full_name, username, email FROM users
+              WHERE role = 'administrator' AND status = 'active' AND email IS NOT NULL AND email <> ''"
+        )->fetchAll();
+
+        $sent = 0;
+        foreach ($admins as $admin) {
+            $error = send_low_disinfectant_mail($admin, $deviceId, $level);
+            if ($error === null) {
+                $sent++;
+            } else {
+                error_log('low disinfectant mail to ' . mail_mask((string) $admin['email']) . ' failed: ' . $error);
+            }
+        }
+
+        if ($admins) {
+            // Nobody reached: try again in 15 minutes, not on every sync and not in 6 hours.
+            set_setting('low_disinfectant_last_mail', (string) ($sent > 0 ? time() : time() - LOW_DISINFECTANT_REMIND_S + 900));
+        }
+    } catch (Throwable $e) {
+        error_log('low disinfectant mail failed: ' . $e->getMessage());
+    }
+}
+
+/** The level is back above the warning: the next low episode e-mails straight away. */
+function reset_low_disinfectant_mail(): void
+{
+    if (setting('low_disinfectant_last_mail', '') !== '') {
+        set_setting('low_disinfectant_last_mail', '');
+    }
+}
+
 function unread_notification_count(): int
 {
     return (int) db()->query('SELECT COUNT(*) FROM notifications WHERE is_read = 0')->fetchColumn();
