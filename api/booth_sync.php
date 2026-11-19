@@ -566,12 +566,22 @@ foreach ($cycles as $c) {
     $entryDate = date('Y-m-d', strtotime($detectedAt));
     $entryTime = date('H:i:s', strtotime($detectedAt));
     $temp      = round($screeningTemp, 1);
-    $access    = $outcome === 'granted' ? 'granted' : 'denied';
+    // The server is authoritative on access, as in api/entry.php: a reading above the
+    // threshold is a denial whatever the booth decided. The booth can disagree when it is
+    // still running an older threshold than System Settings (it adopts changes on its next
+    // sync). The booth's own decision is kept for the record below.
+    $boothGranted = $outcome === 'granted';
+    $highTemp     = $temp > $threshold;
+    $access       = ($boothGranted && !$highTemp) ? 'granted' : 'denied';
 
     $misting    = $pumpBursts > 0 ? 'on' : 'off';
     $entryNote  = $remarks !== ''
         ? $remarks
         : ($access === 'granted' ? 'Cleared for entry' : 'Access denied');
+    if ($boothGranted && $highTemp) {
+        $entryNote = mb_substr(sprintf('Access denied: %.1f°C exceeds the %.1f°C threshold (the booth had cleared entry). ', $temp, $threshold)
+            . $entryNote, 0, 255);
+    }
 
     // Granted, but not a believable body temperature: flag it for review (remarks here,
     // a notification below, a distinct badge in the UI). remarks is VARCHAR(255).
@@ -622,7 +632,7 @@ foreach ($cycles as $c) {
             'high_temperature',
             'High Temperature Detected',
             sprintf('Booth %s recorded %.1f°C (threshold %.1f°C). %s.', $deviceId, $temp, $threshold,
-                $access === 'denied' ? 'Access denied' : 'Access was granted by the booth'),
+                $boothGranted ? 'Access denied (the booth had let them through)' : 'Access denied'),
             'danger',
             $entryId,
         ];
