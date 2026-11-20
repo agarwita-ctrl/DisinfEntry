@@ -183,7 +183,7 @@ const int DOOR_OPEN_ANGLE   = 90;
 // is silently ignored - while this value was still reported to the server as the booth's
 // configuration. Keep it within the real range so what is reported is what is used.
 const int SERVO_MIN_US = 1000;
-const int SERVO_MAX_US = 2500;
+const int SERVO_MAX_US = 3000;
 
 // ---------- Fixed detection settings ----------
 const unsigned long ULTRASONIC_TIMEOUT_US = 25000;
