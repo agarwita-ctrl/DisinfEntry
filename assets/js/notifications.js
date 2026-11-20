@@ -16,7 +16,9 @@
   function renderCounts(byType) {
     const get = (t) => byType[t]?.total ?? 0;
     $('#nHighTemp').text(get('high_temperature'));
-    $('#nDenied').text(get('denied_entry'));
+    // A high temperature is always a denial, but it raises its own alert type rather than
+    // 'denied_entry', so both count towards the denied-entries card.
+    $('#nDenied').text(get('denied_entry') + get('high_temperature'));
     $('#nOffline').text(get('device_offline'));
     $('#nDisinfectant').text(get('low_disinfectant'));
   }
